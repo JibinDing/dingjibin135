@@ -1,0 +1,42 @@
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
+
+const app = express();
+const PORT = 3000;
+const tasksFile = path.join(__dirname, 'tasks.txt');
+
+// Middleware to parse JSON bodies
+app.use(express.json());
+
+// Serve static files (HTML, CSS, JS)
+app.use(express.static(path.join(__dirname, '..')));
+
+// API to get all tasks
+app.get('/tasks', (req, res) => {
+    fs.readFile(tasksFile, 'utf8', (err, data) => {
+        if (err) {
+            console.error('Error reading tasks file:', err);
+            return res.status(500).json({ error: 'Failed to load tasks.' });
+        }
+        const tasks = data ? JSON.parse(data) : [];
+        res.json(tasks);
+    });
+});
+
+// API to save tasks
+app.post('/tasks', (req, res) => {
+    const tasks = req.body;
+    fs.writeFile(tasksFile, JSON.stringify(tasks), (err) => {
+        if (err) {
+            console.error('Error writing to tasks file:', err);
+            return res.status(500).json({ error: 'Failed to save tasks.' });
+        }
+        res.json({ message: 'Tasks saved successfully!' });
+    });
+});
+
+// Start the server
+app.listen(PORT, () => {
+    console.log(`Server is running on http://localhost:${PORT}`);
+});
