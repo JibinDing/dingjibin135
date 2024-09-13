@@ -1,0 +1,332 @@
+To add the ability to store tasks and retrieve them from an H2 database in a Spring Boot project, we need to set up a backend with Spring Boot that will handle the storage and retrieval of tasks, and then connect the frontend (your HTML, CSS, and JavaScript files) to this backend using REST APIs.
+
+### Step-by-Step Solution
+
+#### Step 1: Set Up the Spring Boot Project
+
+1. **Create a Spring Boot Project**:
+   - Open IntelliJ IDEA, go to **File > New > Project**.
+   - Choose **Spring Initializr**.
+   - Provide the necessary details like Group, Artifact, and Project Name.
+   - Add dependencies:
+     - **Spring Web** (for building REST APIs)
+     - **Spring Data JPA** (for interacting with the database)
+     - **H2 Database** (for in-memory database)
+
+2. **Project Structure**:
+   - Your project should have a structure similar to:
+     ```
+     └── src
+         ├── main
+         │   ├── java
+         │   │   └── com.example.demo
+         │   │       ├── controller
+         │   │       ├── model
+         │   │       ├── repository
+         │   │       └── service
+         │   └── resources
+         │       ├── static
+         │       │   ├── index.html
+         │       │   ├── styles.css
+         │       │   └── scripts.js
+         │       └── application.properties
+     ```
+
+#### Step 2: Define the Task Model
+
+Create a new class `Task` in the `model` package:
+
+```java
+package com.example.demo.model;
+
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+
+@Entity
+public class Task {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    private String text;
+    private boolean completed;
+
+    // Constructors
+    public Task() {}
+
+    public Task(String text, boolean completed) {
+        this.text = text;
+        this.completed = completed;
+    }
+
+    // Getters and Setters
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    public String getText() {
+        return text;
+    }
+
+    public void setText(String text) {
+        this.text = text;
+    }
+
+    public boolean isCompleted() {
+        return completed;
+    }
+
+    public void setCompleted(boolean completed) {
+        this.completed = completed;
+    }
+}
+```
+
+#### Step 3: Create the Task Repository
+
+Create an interface `TaskRepository` in the `repository` package:
+
+```java
+package com.example.demo.repository;
+
+import com.example.demo.model.Task;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public interface TaskRepository extends JpaRepository<Task, Long> {
+}
+```
+
+#### Step 4: Create the Task Service
+
+Create a class `TaskService` in the `service` package to handle the business logic:
+
+```java
+package com.example.demo.service;
+
+import com.example.demo.model.Task;
+import com.example.demo.repository.TaskRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+
+@Service
+public class TaskService {
+
+    @Autowired
+    private TaskRepository taskRepository;
+
+    public List<Task> getAllTasks() {
+        return taskRepository.findAll();
+    }
+
+    public Task saveTask(Task task) {
+        return taskRepository.save(task);
+    }
+
+    public void deleteTask(Long id) {
+        taskRepository.deleteById(id);
+    }
+
+    public Task completeTask(Long id) {
+        Task task = taskRepository.findById(id).orElse(null);
+        if (task != null) {
+            task.setCompleted(true);
+            return taskRepository.save(task);
+        }
+        return null;
+    }
+}
+```
+
+#### Step 5: Create the Task Controller
+
+Create a REST controller `TaskController` in the `controller` package:
+
+```java
+package com.example.demo.controller;
+
+import com.example.demo.model.Task;
+import com.example.demo.service.TaskService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/tasks")
+public class TaskController {
+
+    @Autowired
+    private TaskService taskService;
+
+    @GetMapping
+    public List<Task> getTasks() {
+        return taskService.getAllTasks();
+    }
+
+    @PostMapping
+    public Task addTask(@RequestBody Task task) {
+        return taskService.saveTask(task);
+    }
+
+    @DeleteMapping("/{id}")
+    public void deleteTask(@PathVariable Long id) {
+        taskService.deleteTask(id);
+    }
+
+    @PutMapping("/{id}/complete")
+    public Task completeTask(@PathVariable Long id) {
+        return taskService.completeTask(id);
+    }
+}
+```
+
+#### Step 6: Configure the H2 Database
+
+Open the `application.properties` file and configure the H2 database:
+
+```properties
+# H2 Database Configuration
+spring.datasource.url=jdbc:h2:mem:testdb
+spring.datasource.driverClassName=org.h2.Driver
+spring.datasource.username=sa
+spring.datasource.password=password
+spring.jpa.database-platform=org.hibernate.dialect.H2Dialect
+spring.h2.console.enabled=true
+```
+
+#### Step 7: Update the Frontend JavaScript to Use REST APIs
+
+Open the `scripts.js` file and update it to use the REST APIs for managing tasks:
+
+```javascript
+document.addEventListener('DOMContentLoaded', function () {
+    const addTaskBtn = document.getElementById('add-task-btn');
+    const newTaskInput = document.getElementById('new-task');
+    const taskList = document.getElementById('task-list');
+    const totalTasksElem = document.getElementById('total-tasks');
+    const completedTasksElem = document.getElementById('completed-tasks');
+
+    // Fetch tasks from server
+    function fetchTasks() {
+        fetch('/api/tasks')
+            .then(response => response.json())
+            .then(data => {
+                tasks = data;
+                renderTasks();
+            });
+    }
+
+    function renderTasks() {
+        taskList.innerHTML = '';
+
+        tasks.forEach((task) => {
+            const taskItem = document.createElement('li');
+            taskItem.setAttribute('draggable', 'true');
+            taskItem.classList.add('task-item');
+            if (task.completed) taskItem.classList.add('completed');
+
+            const taskText = document.createElement('span');
+            taskText.classList.add('task');
+            taskText.textContent = task.text;
+
+            const completedLabel = document.createElement('span');
+            completedLabel.textContent = task.completed ? ' (Completed)' : '';
+            completedLabel.style.color = 'green'; 
+
+            const completeBtn = document.createElement('button');
+            completeBtn.textContent = 'Complete';
+            completeBtn.classList.add('complete-btn');
+            completeBtn.disabled = task.completed; 
+            completeBtn.addEventListener('click', () => completeTask(task.id));
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.textContent = 'Delete';
+            deleteBtn.classList.add('delete-btn');
+            deleteBtn.addEventListener('click', () => deleteTask(task.id));
+
+            taskItem.appendChild(taskText);
+            taskItem.appendChild(completedLabel);
+            taskItem.appendChild(completeBtn);
+            taskItem.appendChild(deleteBtn);
+
+            taskList.appendChild(taskItem);
+
+            taskItem.addEventListener('dragstart', (e) => dragStart(e, task.id));
+            taskItem.addEventListener('dragover', dragOver);
+            taskItem.addEventListener('drop', (e) => drop(e, task.id));
+        });
+
+        updateSummary();
+    }
+
+    function addTask() {
+        const taskText = newTaskInput.value.trim();
+        if (taskText) {
+            fetch('/api/tasks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: taskText, completed: false })
+            })
+            .then(fetchTasks);
+            newTaskInput.value = '';
+        }
+    }
+
+    function deleteTask(id) {
+        fetch(`/api/tasks/${id}`, { method: 'DELETE' })
+            .then(fetchTasks);
+    }
+
+    function completeTask(id) {
+        fetch(`/api/tasks/${id}/complete`, { method: 'PUT' })
+            .then(fetchTasks);
+    }
+
+    function updateSummary() {
+        totalTasksElem.textContent = tasks.length;
+        completedTasksElem.textContent = tasks.filter((task) => task.completed).length;
+    }
+
+    let draggedItemIndex = null;
+
+    function dragStart(e, id) {
+        draggedItemIndex = id;
+        e.dataTransfer.effectAllowed = 'move';
+    }
+
+    function dragOver(e) {
+        e.preventDefault();
+    }
+
+    function drop(e, id) {
+        e.preventDefault();
+        // Handle reordering if needed
+    }
+
+    addTaskBtn.addEventListener('click', addTask);
+    newTaskInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') addTask();
+    });
+
+    fetchTasks(); // Load tasks on page load
+});
+```
+
+#### Step 8: Run the Spring Boot Application
+
+1. **Run the Application**: Right-click on the main class (e.g., `DemoApplication.java`) and select **Run**.
+2. **Access the H2 Console**: Open your browser and go to `http://localhost:8080/h2-console` to view and manage your database.
+
+#### Step 9: Test the Application
+
+1. **Open `index.html` in the browser**: Go to `http
