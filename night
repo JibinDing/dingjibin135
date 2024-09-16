@@ -1,0 +1,241 @@
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+
+@Entity
+public class Task {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    private String text;
+    private boolean completed;
+
+    // Constructors
+    public Task() {
+    }
+
+    public Task(String text, boolean completed) {
+        this.text = text;
+        this.completed = completed;
+    }
+
+    // Getters and Setters
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    public String getText() {
+        return text;
+    }
+
+    public void setText(String text) {
+        this.text = text;
+    }
+
+    public boolean isCompleted() {
+        return completed;
+    }
+
+    public void setCompleted(boolean completed) {
+        this.completed = completed;
+    }
+}
+
+
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public interface TaskRepository extends JpaRepository<Task, Long> {
+}
+
+
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/tasks")
+public class TaskController {
+
+    @Autowired
+    private TaskRepository taskRepository;
+
+    // Get all tasks
+    @GetMapping
+    public List<Task> getTasks() {
+        return taskRepository.findAll();
+    }
+
+    // Add a new task
+    @PostMapping
+    public Task addTask(@RequestBody Task task) {
+        return taskRepository.save(task);
+    }
+
+    // Update a task (mark as complete or incomplete)
+    @PutMapping("/{id}")
+    public Task updateTask(@PathVariable Long id, @RequestBody Task updatedTask) {
+        return taskRepository.findById(id).map(task -> {
+            task.setText(updatedTask.getText());
+            task.setCompleted(updatedTask.isCompleted());
+            return taskRepository.save(task);
+        }).orElseThrow(() -> new RuntimeException("Task not found with id " + id));
+    }
+
+    // Delete a task
+    @DeleteMapping("/{id}")
+    public void deleteTask(@PathVariable Long id) {
+        taskRepository.deleteById(id);
+    }
+}
+
+
+
+
+document.addEventListener('DOMContentLoaded', function() {
+    const addTaskBtn = document.getElementById('add-task-btn');
+    const newTaskInput = document.getElementById('new-task');
+    const taskList = document.getElementById('task-list');
+    const totalTasksElem = document.getElementById('total-tasks');
+    const completedTasksElem = document.getElementById('completed-tasks');
+
+    let tasks = [];
+
+    // Fetch tasks from the server
+    async function fetchTasks() {
+        const response = await fetch('/tasks');
+        tasks = await response.json();
+        renderTasks();
+    }
+
+    // Add a new task to the server
+    async function addTask() {
+        const taskText = newTaskInput.value.trim();
+        if (taskText) {
+            const response = await fetch('/tasks', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ text: taskText, completed: false })
+            });
+
+            const newTask = await response.json();
+            tasks.push(newTask);
+            newTaskInput.value = '';
+            renderTasks();
+        }
+    }
+
+    // Delete a task from the server
+    async function deleteTask(index) {
+        const task = tasks[index];
+        await fetch(`/tasks/${task.id}`, {
+            method: 'DELETE'
+        });
+
+        tasks.splice(index, 1);
+        renderTasks();
+    }
+
+    // Toggle complete status of a task on the server
+    async function toggleCompleteTask(index) {
+        const task = tasks[index];
+        task.completed = !task.completed;
+
+        await fetch(`/tasks/${task.id}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(task)
+        });
+
+        renderTasks();
+    }
+
+    // Render tasks on the screen
+    function renderTasks() {
+        taskList.innerHTML = '';
+
+        tasks.forEach((task, index) => {
+            const taskItem = document.createElement('li');
+            taskItem.setAttribute('draggable', 'true');
+            taskItem.classList.add('task-item');
+            if (task.completed) taskItem.classList.add('completed');
+
+            const taskText = document.createElement('span');
+            taskText.classList.add('task');
+            taskText.textContent = task.text;
+
+            const completeBtn = document.createElement('button');
+            completeBtn.textContent = 'Complete';
+            completeBtn.classList.add('complete-btn');
+            completeBtn.addEventListener('click', () => toggleCompleteTask(index));
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.textContent = 'Delete';
+            deleteBtn.classList.add('delete-btn');
+            deleteBtn.addEventListener('click', () => deleteTask(index));
+
+            taskItem.appendChild(taskText);
+            taskItem.appendChild(completeBtn);
+            taskItem.appendChild(deleteBtn);
+
+            taskList.appendChild(taskItem);
+
+            // Drag-and-drop functionality
+            taskItem.addEventListener('dragstart', (e) => dragStart(e, index));
+            taskItem.addEventListener('dragover', dragOver);
+            taskItem.addEventListener('drop', (e) => drop(e, index));
+        });
+
+        updateSummary();
+    }
+
+    function updateSummary() {
+        totalTasksElem.textContent = tasks.length;
+        completedTasksElem.textContent = tasks.filter(task => task.completed).length;
+    }
+
+    // Drag-and-drop functions
+    let draggedItemIndex = null;
+
+    function dragStart(e, index) {
+        draggedItemIndex = index;
+        e.dataTransfer.effectAllowed = 'move';
+    }
+
+    function dragOver(e) {
+        e.preventDefault();
+    }
+
+    function drop(e, index) {
+        e.preventDefault();
+        if (draggedItemIndex !== null) {
+            const draggedItem = tasks.splice(draggedItemIndex, 1)[0];
+            tasks.splice(index, 0, draggedItem);
+            draggedItemIndex = null;
+            renderTasks();
+        }
+    }
+
+    addTaskBtn.addEventListener('click', addTask);
+    newTaskInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') addTask();
+    });
+
+    // Initial load of tasks
+    fetchTasks();
+});
+
