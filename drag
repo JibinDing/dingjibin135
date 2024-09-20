@@ -1,0 +1,197 @@
+To enable prioritizing tasks by dragging and dropping items in the list, we can integrate a drag-and-drop feature in your React project. One popular library that makes this simple is `react-beautiful-dnd`, which provides an intuitive API for drag-and-drop interactions within React.
+
+Here’s how we can add drag-and-drop functionality to allow tasks to be moved up or down the list:
+
+### Step 1: Install `react-beautiful-dnd`
+
+First, install the `react-beautiful-dnd` library:
+
+```bash
+npm install react-beautiful-dnd
+```
+
+or
+
+```bash
+yarn add react-beautiful-dnd
+```
+
+### Step 2: Update `TaskList.tsx` to Support Drag-and-Drop
+
+Now, we’ll integrate drag-and-drop functionality into your `TaskList.tsx` component. Here’s how:
+
+1. **Import** the required components from `react-beautiful-dnd`.
+2. **Wrap** the list of tasks in the `DragDropContext`, `Droppable`, and `Draggable` components.
+3. **Handle** the task reordering when an item is dragged.
+
+Here’s the updated `TaskList.tsx` component:
+
+```tsx
+import React from 'react';
+import TaskItem from './TaskItem';
+import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
+
+interface Task {
+  text: string;
+  completed: boolean;
+}
+
+interface TaskListProps {
+  tasks: Task[];
+  onCompleteTask: (index: number) => void;
+  onDeleteTask: (index: number) => void;
+  onReorderTasks: (tasks: Task[]) => void;
+}
+
+const TaskList: React.FC<TaskListProps> = ({ tasks, onCompleteTask, onDeleteTask, onReorderTasks }) => {
+  
+  const handleOnDragEnd = (result: DropResult) => {
+    const { destination, source } = result;
+
+    // If no destination, return (dropped outside the list)
+    if (!destination) return;
+
+    // If the task was dropped back in the same position, do nothing
+    if (destination.index === source.index) return;
+
+    // Create a new list by reordering the tasks
+    const reorderedTasks = Array.from(tasks);
+    const [movedTask] = reorderedTasks.splice(source.index, 1); // Remove the dragged task
+    reorderedTasks.splice(destination.index, 0, movedTask); // Insert it at the new position
+
+    // Update the parent component's task state
+    onReorderTasks(reorderedTasks);
+  };
+
+  return (
+    <DragDropContext onDragEnd={handleOnDragEnd}>
+      <Droppable droppableId="task-list">
+        {(provided) => (
+          <ul
+            id="task-list"
+            {...provided.droppableProps}
+            ref={provided.innerRef}
+          >
+            {tasks.map((task, index) => (
+              <Draggable key={index} draggableId={String(index)} index={index}>
+                {(provided) => (
+                  <li
+                    ref={provided.innerRef}
+                    {...provided.draggableProps}
+                    {...provided.dragHandleProps}
+                    className={task.completed ? 'completed' : ''}
+                  >
+                    <TaskItem
+                      text={task.text}
+                      completed={task.completed}
+                      onComplete={() => onCompleteTask(index)}
+                      onDelete={() => onDeleteTask(index)}
+                    />
+                  </li>
+                )}
+              </Draggable>
+            ))}
+            {provided.placeholder}
+          </ul>
+        )}
+      </Droppable>
+    </DragDropContext>
+  );
+};
+
+export default TaskList;
+```
+
+### Step 3: Update `App.tsx` to Handle Task Reordering
+
+Now that we’ve added drag-and-drop to the task list, we need to modify `App.tsx` to handle the reordered task list.
+
+Here’s the updated `App.tsx`:
+
+```tsx
+import React, { useState } from 'react';
+import './App.css';
+import TaskInput from './TaskInput';
+import TaskList from './TaskList';
+import TaskSummary from './TaskSummary';
+
+interface Task {
+  text: string;
+  completed: boolean;
+}
+
+const App: React.FC = () => {
+  const [tasks, setTasks] = useState<Task[]>([]);
+
+  const addTask = (text: string) => {
+    setTasks([...tasks, { text, completed: false }]);
+  };
+
+  const completeTask = (index: number) => {
+    const updatedTasks = [...tasks];
+    updatedTasks[index].completed = true;
+    setTasks(updatedTasks);
+  };
+
+  const deleteTask = (index: number) => {
+    const updatedTasks = tasks.filter((_, i) => i !== index);
+    setTasks(updatedTasks);
+  };
+
+  const reorderTasks = (newTasks: Task[]) => {
+    setTasks(newTasks);
+  };
+
+  const totalTasks = tasks.length;
+  const completedTasks = tasks.filter((task) => task.completed).length;
+
+  return (
+    <div className="container">
+      <h1>To-Do List</h1>
+      <TaskInput onAddTask={addTask} />
+      <TaskList 
+        tasks={tasks} 
+        onCompleteTask={completeTask} 
+        onDeleteTask={deleteTask} 
+        onReorderTasks={reorderTasks} 
+      />
+      <TaskSummary totalTasks={totalTasks} completedTasks={completedTasks} />
+    </div>
+  );
+};
+
+export default App;
+```
+
+### Step 4: Update `TaskItem.tsx` (if necessary)
+
+We don’t need to modify the `TaskItem.tsx` much, but you can adjust it to make it work well with drag-and-drop. The `TaskItem` itself remains the same as the drag-and-drop behavior is handled in the `TaskList` component.
+
+### Step 5: Styling Adjustments (Optional)
+
+You may want to make some adjustments to your CSS to reflect the dragged state. For example:
+
+```css
+/* Highlight the dragged item */
+.dragging {
+  background-color: #e0e0e0;
+  opacity: 0.8;
+}
+```
+
+You can apply this class to items being dragged using `provided.snapshot.isDragging` from `Draggable`, but this is optional.
+
+### Step 6: Testing Drag and Drop
+
+Now you can run your project using `npm start` or `yarn start`. You should be able to:
+
+1. **Add tasks** to your to-do list.
+2. **Drag** any task to reorder its position in the list.
+3. **Drop** the task above or below other tasks to change its priority.
+
+### Summary of Changes:
+1. **Installed `react-beautiful-dnd`** to enable drag-and-drop functionality.
+2. **Wrapped the task list** with `DragDropContext`, `Droppable`, and `Draggable` components to allow tasks to be moved.
+3. **Updated the task state** in `App.tsx` when tasks are reordered.
+
+This will allow you to move tasks above or below others in the to-do list, enabling prioritization by dragging and dropping! Let me know if you need any further adjustments or explanations!
