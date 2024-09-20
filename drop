@@ -1,0 +1,219 @@
+To implement the ability to prioritize tasks by moving them up and down in the list using the mouse (without third-party libraries), we can utilize **native HTML5 Drag and Drop API**. This feature is built into modern browsers, and it's powerful enough to handle drag-and-drop functionality without relying on external modules.
+
+Here’s the step-by-step process to modify the existing project to add drag-and-drop functionality:
+
+### Steps:
+1. **Add draggable attributes**: We'll make the task items draggable by adding the `draggable` attribute.
+2. **Handle drag and drop events**: We'll implement the drag-and-drop events (`onDragStart`, `onDragOver`, `onDrop`, etc.) to reorder the tasks.
+3. **Update state after drop**: We'll update the state of the task list when a task is dropped to reflect the new order.
+
+### Step 1: Modify the `TaskList` and `TaskItem` Components for Dragging
+
+We'll add the necessary drag events (`onDragStart`, `onDragOver`, and `onDrop`) to the task items so that we can move them around in the list.
+
+#### `TaskItem.tsx` (Updated)
+
+```tsx
+import React from 'react';
+
+interface TaskItemProps {
+  text: string;
+  completed: boolean;
+  onComplete: () => void;
+  onDelete: () => void;
+  onDragStart: (e: React.DragEvent<HTMLLIElement>, index: number) => void;
+  onDragOver: (e: React.DragEvent<HTMLLIElement>) => void;
+  onDrop: (e: React.DragEvent<HTMLLIElement>, index: number) => void;
+  index: number;
+}
+
+const TaskItem: React.FC<TaskItemProps> = ({ 
+  text, completed, onComplete, onDelete, onDragStart, onDragOver, onDrop, index 
+}) => {
+  return (
+    <li
+      className={completed ? 'completed' : ''}
+      draggable
+      onDragStart={(e) => onDragStart(e, index)}
+      onDragOver={(e) => onDragOver(e)}
+      onDrop={(e) => onDrop(e, index)}
+    >
+      <span>{text}</span>
+      {completed && <span className="completed-label"> (Completed)</span>}
+      <button onClick={onComplete} disabled={completed} className="complete-btn">
+        Complete
+      </button>
+      <button onClick={onDelete} className="delete-btn">
+        Delete
+      </button>
+    </li>
+  );
+};
+
+export default TaskItem;
+```
+
+#### Key Features:
+- **`draggable`**: This attribute makes the task draggable.
+- **`onDragStart`**: This event fires when a drag starts. We'll use this to track which item is being dragged.
+- **`onDragOver`**: This event is needed to allow a drop. Without this, the `onDrop` event will not be triggered.
+- **`onDrop`**: This event fires when a task is dropped onto another task. We'll use this to update the order of the tasks.
+
+### Step 2: Implement Drag Logic in `TaskList`
+
+We’ll update the `TaskList` to manage the drag-and-drop functionality.
+
+#### `TaskList.tsx` (Updated)
+
+```tsx
+import React, { useState } from 'react';
+import TaskItem from './TaskItem';
+
+interface Task {
+  text: string;
+  completed: boolean;
+}
+
+interface TaskListProps {
+  tasks: Task[];
+  onCompleteTask: (index: number) => void;
+  onDeleteTask: (index: number) => void;
+  onReorderTasks: (startIndex: number, endIndex: number) => void;
+}
+
+const TaskList: React.FC<TaskListProps> = ({ tasks, onCompleteTask, onDeleteTask, onReorderTasks }) => {
+  const [draggedTaskIndex, setDraggedTaskIndex] = useState<number | null>(null);
+
+  const handleDragStart = (e: React.DragEvent<HTMLLIElement>, index: number) => {
+    setDraggedTaskIndex(index);
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLLIElement>) => {
+    e.preventDefault(); // Allow the drop
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLLIElement>, dropIndex: number) => {
+    e.preventDefault();
+    if (draggedTaskIndex !== null && draggedTaskIndex !== dropIndex) {
+      onReorderTasks(draggedTaskIndex, dropIndex);
+    }
+    setDraggedTaskIndex(null); // Reset the dragged task index after drop
+  };
+
+  return (
+    <ul id="task-list">
+      {tasks.map((task, index) => (
+        <TaskItem
+          key={index}
+          index={index}
+          text={task.text}
+          completed={task.completed}
+          onComplete={() => onCompleteTask(index)}
+          onDelete={() => onDeleteTask(index)}
+          onDragStart={handleDragStart}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+        />
+      ))}
+    </ul>
+  );
+};
+
+export default TaskList;
+```
+
+#### Key Features:
+- **`handleDragStart`**: Stores the index of the task that is being dragged.
+- **`handleDrop`**: Updates the task list order when a task is dropped on another task. It prevents a task from being dropped on itself.
+- **`handleDragOver`**: Prevents the default behavior to allow dropping.
+
+### Step 3: Modify `App.tsx` to Handle Reordering
+
+In `App.tsx`, we need to add a method to reorder the tasks in the state when they are dropped in a new position.
+
+#### `App.tsx` (Updated)
+
+```tsx
+import React, { useState } from 'react';
+import './App.css';
+import TaskInput from './TaskInput';
+import TaskList from './TaskList';
+import TaskSummary from './TaskSummary';
+
+interface Task {
+  text: string;
+  completed: boolean;
+}
+
+const App: React.FC = () => {
+  const [tasks, setTasks] = useState<Task[]>([]);
+
+  const addTask = (text: string) => {
+    setTasks([...tasks, { text, completed: false }]);
+  };
+
+  const completeTask = (index: number) => {
+    const updatedTasks = [...tasks];
+    updatedTasks[index].completed = true;
+    setTasks(updatedTasks);
+  };
+
+  const deleteTask = (index: number) => {
+    const updatedTasks = tasks.filter((_, i) => i !== index);
+    setTasks(updatedTasks);
+  };
+
+  const reorderTasks = (startIndex: number, endIndex: number) => {
+    const updatedTasks = [...tasks];
+    const [removed] = updatedTasks.splice(startIndex, 1);
+    updatedTasks.splice(endIndex, 0, removed);
+    setTasks(updatedTasks);
+  };
+
+  const totalTasks = tasks.length;
+  const completedTasks = tasks.filter((task) => task.completed).length;
+
+  return (
+    <div className="container">
+      <h1>To-Do List</h1>
+      <TaskInput onAddTask={addTask} />
+      <TaskList
+        tasks={tasks}
+        onCompleteTask={completeTask}
+        onDeleteTask={deleteTask}
+        onReorderTasks={reorderTasks}
+      />
+      <TaskSummary totalTasks={totalTasks} completedTasks={completedTasks} />
+    </div>
+  );
+};
+
+export default App;
+```
+
+### Step 4: Explanation of Logic
+
+1. **`reorderTasks`**: This function is responsible for reordering the tasks. It takes two indices: the `startIndex` (the original position of the dragged task) and the `endIndex` (the position where the task is dropped). It:
+   - Removes the task from the original position using `splice`.
+   - Inserts it into the new position using `splice` again.
+   - Updates the state with the reordered tasks.
+
+2. **Drag-and-Drop Workflow**:
+   - A task starts being dragged by firing the `onDragStart` event, which records the task's original index.
+   - The task is dragged over another task, with the `onDragOver` event preventing the default behavior so that the task can be dropped.
+   - When the task is dropped on another task, the `onDrop` event fires and reorders the list by calling `reorderTasks`.
+
+### Step 5: Run the Project
+
+1. **Ensure all components are placed in the `src` directory**.
+2. **Run the project** using `npm start` or `yarn start`.
+
+Now, you should be able to:
+- Drag and drop tasks to reorder them in the list.
+- The reordering will be reflected in the task list in real-time.
+
+### Conclusion
+
+Using the **HTML5 Drag and Drop API**, we implemented drag-and-drop functionality without any third-party libraries. Tasks can now be reordered by dragging them above or below other tasks, and the order is updated in the state accordingly.
+
+Let me know if you need any further enhancements!
