@@ -1,0 +1,157 @@
+To store your GitLab data offline using a relational database, follow this detailed solution:
+
+1. Database Design
+
+Entities and Relationships
+
+	1.	Teams Table:
+	•	Stores team-level metadata.
+	2.	Repositories Table:
+	•	Stores repository-level metadata and links to teams.
+	3.	Metrics Table:
+	•	Stores the actual metrics for repositories, such as PR counts, large commits, etc., with timestamps for tracking.
+
+Schema Design
+
+	•	teams Table:
+
+CREATE TABLE teams (
+    team_id SERIAL PRIMARY KEY,
+    team_name VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+	•	repositories Table:
+
+CREATE TABLE repositories (
+    repo_id SERIAL PRIMARY KEY,
+    team_id INT REFERENCES teams(team_id) ON DELETE CASCADE,
+    repo_name VARCHAR(255) NOT NULL,
+    last_synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+	•	metrics Table:
+
+CREATE TABLE metrics (
+    metric_id SERIAL PRIMARY KEY,
+    repo_id INT REFERENCES repositories(repo_id) ON DELETE CASCADE,
+    metric_type VARCHAR(255) NOT NULL, -- e.g., "open_prs", "closed_prs", "large_commits"
+    metric_value INT NOT NULL,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+2. Data Ingestion Workflow
+
+Steps to Store Data
+
+	1.	Fetch Data from GitLab API:
+	•	Use your existing API logic to pull data for repositories.
+	•	Example:
+	•	Open/closed PRs count.
+	•	Large commits (e.g., lines added + deleted > 1000).
+	2.	Map API Data to Relational Schema:
+	•	For each repository:
+	•	Check if the repository exists in the repositories table.
+	•	Insert or update the repository record.
+	•	Insert new metrics into the metrics table with a timestamp.
+	3.	Insert/Update Workflow
+	•	Insert new repositories:
+
+INSERT INTO repositories (team_id, repo_name, last_synced_at)
+VALUES (?, ?, ?)
+ON CONFLICT (repo_id) DO UPDATE SET last_synced_at = EXCLUDED.last_synced_at;
+
+
+	•	Insert new metrics:
+
+INSERT INTO metrics (repo_id, metric_type, metric_value, timestamp)
+VALUES (?, ?, ?, ?);
+
+
+	4.	Ensure Atomicity:
+	•	Use transactions to ensure all updates (repository metadata and metrics) succeed together.
+
+3. Database Maintenance
+
+Indexes:
+
+	•	Create indexes to speed up queries.
+	•	Example:
+
+CREATE INDEX idx_repo_team ON repositories (team_id);
+CREATE INDEX idx_metrics_repo ON metrics (repo_id, metric_type);
+
+
+
+Archiving Old Data:
+
+	•	Move old metrics to an archive table or delete them if no longer needed:
+
+DELETE FROM metrics WHERE timestamp < NOW() - INTERVAL '1 year';
+
+
+
+Normalization vs. Denormalization:
+
+	•	Keep the schema normalized for scalability and avoid duplicate data.
+	•	If performance becomes an issue, create summary tables (e.g., aggregated metrics per team/repository).
+
+4. Data Refresh Workflow
+
+Step 1: Scheduled Sync Job
+
+	•	Use a cron job or Spring Scheduler to periodically fetch and store data.
+	•	Example (Spring Scheduler):
+
+@Scheduled(cron = "0 0 * * * ?")  // Run every hour
+public void refreshRepositoryData() {
+    List<Team> teams = teamRepository.findAll();
+    for (Team team : teams) {
+        List<Repository> repos = gitLabService.fetchRepositories(team);
+        repos.forEach(repo -> {
+            updateRepositoryMetrics(repo);
+        });
+    }
+}
+
+
+
+Step 2: Update Metrics
+
+	•	Fetch the latest metrics from GitLab for each repository and compare with the existing data.
+	•	If data has changed, insert a new record with the current timestamp.
+
+5. Example Query Scenarios
+
+Query 1: Fetch Latest Metrics for a Team
+
+SELECT r.repo_name, m.metric_type, SUM(m.metric_value) AS total_value
+FROM repositories r
+JOIN metrics m ON r.repo_id = m.repo_id
+WHERE r.team_id = ?
+GROUP BY r.repo_name, m.metric_type;
+
+Query 2: Fetch Large Commits Across Team Repositories
+
+SELECT r.repo_name, m.metric_value, m.timestamp
+FROM repositories r
+JOIN metrics m ON r.repo_id = m.repo_id
+WHERE r.team_id = ? AND m.metric_type = 'large_commits';
+
+Query 3: Get Metrics History for a Repository
+
+SELECT metric_type, metric_value, timestamp
+FROM metrics
+WHERE repo_id = ?
+ORDER BY timestamp DESC;
+
+6. Advantages of Using a Relational Database
+
+	•	Data Integrity: Foreign key constraints ensure consistency between teams, repositories, and metrics.
+	•	Historical Data: The metrics table with timestamps allows you to track historical trends.
+	•	Query Efficiency: Indexes and SQL queries make it easy to aggregate and analyze data.
+	•	Scalability: You can partition metrics by team or timestamp for large datasets.
+
+This solution ensures your offline storage is robust, maintainable, and optimized for the team dashboard’s data aggregation and retrieval needs.
