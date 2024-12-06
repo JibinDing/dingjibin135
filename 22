@@ -1,0 +1,116 @@
+Both approaches have their pros and cons, and the choice depends on factors such as performance, data consistency, and the frequency of updates. Here’s a breakdown of the two approaches to help you decide:
+
+Option 1: Store All-Time Statistics for Each Repository and Aggregate When Displaying
+
+How It Works
+
+	•	Store all-time statistics (e.g., number of PRs, large commits, etc.) for each repository in the database.
+	•	When displaying team-level statistics, aggregate these values in real time by summing up the statistics for all repositories of the team.
+
+Advantages
+
+	1.	Accuracy:
+	•	Data is always up-to-date because it’s derived directly from the repository statistics.
+	•	No risk of inconsistencies in pre-aggregated data.
+	2.	Flexibility:
+	•	You can easily adjust the aggregation logic (e.g., filter by date range or specific repositories) without needing to modify stored data.
+	3.	Storage Efficiency:
+	•	Avoids storing duplicate aggregated data for teams.
+	4.	Simpler Updates:
+	•	When repository-level statistics change, you only need to update the repository data, not team-level aggregations.
+
+Disadvantages
+
+	1.	Performance Overhead:
+	•	Aggregating statistics for teams requires more computation, especially if the team has many repositories.
+	•	May impact performance for large datasets or frequent requests.
+	2.	Database Load:
+	•	Increases the load on the database when querying team-level statistics in real time.
+
+Use Case
+
+	•	Suitable if team statistics are not requested frequently or if your system can handle the computational load.
+
+Option 2: Pre-Aggregate and Store Team-Level Statistics
+
+How It Works
+
+	•	Periodically calculate and store aggregated team-level statistics based on repository data.
+	•	When displaying team data, fetch the pre-aggregated result directly.
+
+Advantages
+
+	1.	Fast Retrieval:
+	•	Team-level statistics are precomputed, so displaying them is instantaneous.
+	•	Ideal for dashboards where performance is critical.
+	2.	Reduced Query Complexity:
+	•	Simplifies queries for team statistics since aggregation is not required at query time.
+	3.	Lower Database Load:
+	•	Reduces computational load on the database during user requests.
+
+Disadvantages
+
+	1.	Data Consistency:
+	•	Risk of stale or inconsistent data if repository statistics change but the aggregated values are not updated promptly.
+	2.	Update Complexity:
+	•	Requires additional logic to ensure team-level statistics are updated whenever repository data changes.
+	3.	Increased Storage:
+	•	Requires additional storage for team-level statistics, which may lead to redundancy.
+
+Use Case
+
+	•	Suitable if team statistics are requested frequently or need to be displayed with minimal latency (e.g., in high-traffic dashboards).
+
+Recommendation
+
+The better approach depends on your specific needs:
+
+Choose Option 1 (Store Repository-Level Statistics Only) If:
+
+	•	Accuracy is critical (e.g., you need real-time, up-to-date statistics).
+	•	Your system can handle the additional computational overhead during requests.
+	•	You anticipate needing flexibility to calculate different team-level metrics dynamically (e.g., by filtering repositories or dates).
+
+Choose Option 2 (Pre-Aggregate Team-Level Statistics) If:
+
+	•	Performance and response time are critical (e.g., high-traffic dashboards).
+	•	Team statistics change infrequently, and you can afford periodic updates.
+	•	Your system prioritizes reduced database load over real-time accuracy.
+
+Hybrid Approach
+
+If neither approach fully satisfies your requirements, consider a hybrid approach:
+	1.	Store repository-level statistics.
+	2.	Pre-aggregate team-level statistics periodically (e.g., via a scheduled job or event-driven updates).
+	3.	Use the pre-aggregated data for fast responses but fall back to dynamic aggregation if necessary (e.g., for real-time updates).
+
+Example Implementation for Pre-Aggregation (Option 2):
+
+	•	Team-Level Aggregated Table:
+
+CREATE TABLE team_aggregates (
+    team_id INT PRIMARY KEY,
+    total_closed_prs INT,
+    total_open_prs INT,
+    total_large_commits INT,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+	•	Scheduled Job to Update Aggregates:
+
+@Scheduled(cron = "0 0 * * * ?")  // Every hour
+public void updateTeamAggregates() {
+    List<FeatureTeam> teams = featureTeamRepository.findAll();
+    for (FeatureTeam team : teams) {
+        TeamAggregates aggregates = metricService.calculateTeamAggregates(team);
+        teamAggregateRepository.save(aggregates);
+    }
+}
+
+
+	•	Fetching Data:
+	•	Use the team_aggregates table for most requests.
+	•	Optionally aggregate in real-time if fresh data is needed.
+
+This hybrid approach balances performance and flexibility, ensuring fast retrieval while maintaining the ability to display up-to-date statistics when required.
