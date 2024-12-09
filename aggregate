@@ -1,0 +1,193 @@
+If you’ve decided to use the existing Team table to store team-level metrics, here’s a structured approach to proceed with this design while maintaining simplicity and performance:
+
+Steps to Use the Existing Team Table for Metrics
+
+1. Update the Team Entity
+
+Add fields to the FeatureTeam entity (or the equivalent Team table in your database) to store the metrics.
+
+Updated Team Entity Example (Java):
+
+@Entity
+@Table(name = "feature_team")
+public class FeatureTeam {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private String teamName;
+
+    @Enumerated(EnumType.STRING)
+    private Methodology methodology;
+
+    // Metrics fields
+    private int totalClosedPrs;
+    private int totalOpenPrs;
+    private int totalMergedPrs;
+    private int totalLargeCommits;
+
+    private int last30DaysClosedPrs;
+    private int last30DaysOpenPrs;
+    private int last30DaysMergedPrs;
+
+    @Column(name = "last_metrics_updated")
+    private LocalDateTime lastMetricsUpdated;
+
+    // Other fields, relationships, and methods...
+
+    // Getters and Setters
+}
+
+Updated feature_team Table (SQL):
+
+ALTER TABLE feature_team
+ADD COLUMN total_closed_prs INT DEFAULT 0,
+ADD COLUMN total_open_prs INT DEFAULT 0,
+ADD COLUMN total_merged_prs INT DEFAULT 0,
+ADD COLUMN total_large_commits INT DEFAULT 0,
+ADD COLUMN last_30_days_closed_prs INT DEFAULT 0,
+ADD COLUMN last_30_days_open_prs INT DEFAULT 0,
+ADD COLUMN last_30_days_merged_prs INT DEFAULT 0,
+ADD COLUMN last_metrics_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+2. Create a Service to Update Metrics
+
+Write a service to aggregate repository-level metrics and update the corresponding fields in the FeatureTeam table.
+
+Service Example:
+
+@Service
+public class TeamMetricsService {
+
+    @Autowired
+    private RepositoryRepository repositoryRepository;
+
+    @Autowired
+    private MetricRepository metricRepository;
+
+    @Autowired
+    private FeatureTeamRepository featureTeamRepository;
+
+    public void updateTeamMetrics(FeatureTeam team) {
+        // Fetch all repositories belonging to the team
+        List<Repository> repositories = repositoryRepository.findByTeamId(team.getId());
+
+        // Initialize aggregated metrics
+        int totalClosedPrs = 0;
+        int totalOpenPrs = 0;
+        int totalMergedPrs = 0;
+        int totalLargeCommits = 0;
+
+        int last30DaysClosedPrs = 0;
+        int last30DaysOpenPrs = 0;
+        int last30DaysMergedPrs = 0;
+
+        // Aggregate data from each repository
+        for (Repository repo : repositories) {
+            totalClosedPrs += metricRepository.getMetricValue(repo.getId(), "closed_prs");
+            totalOpenPrs += metricRepository.getMetricValue(repo.getId(), "open_prs");
+            totalMergedPrs += metricRepository.getMetricValue(repo.getId(), "merged_prs");
+            totalLargeCommits += metricRepository.getMetricValue(repo.getId(), "large_commits");
+
+            last30DaysClosedPrs += metricRepository.getMetricValueForLast30Days(repo.getId(), "closed_prs");
+            last30DaysOpenPrs += metricRepository.getMetricValueForLast30Days(repo.getId(), "open_prs");
+            last30DaysMergedPrs += metricRepository.getMetricValueForLast30Days(repo.getId(), "merged_prs");
+        }
+
+        // Update team metrics
+        team.setTotalClosedPrs(totalClosedPrs);
+        team.setTotalOpenPrs(totalOpenPrs);
+        team.setTotalMergedPrs(totalMergedPrs);
+        team.setTotalLargeCommits(totalLargeCommits);
+
+        team.setLast30DaysClosedPrs(last30DaysClosedPrs);
+        team.setLast30DaysOpenPrs(last30DaysOpenPrs);
+        team.setLast30DaysMergedPrs(last30DaysMergedPrs);
+
+        team.setLastMetricsUpdated(LocalDateTime.now());
+
+        // Save updated team entity
+        featureTeamRepository.save(team);
+    }
+}
+
+3. Schedule Periodic Updates
+
+To ensure the metrics remain up-to-date, set up a scheduled job that refreshes the metrics for all teams periodically.
+
+Scheduled Job Example:
+
+@Service
+public class MetricsRefreshJob {
+
+    @Autowired
+    private FeatureTeamRepository featureTeamRepository;
+
+    @Autowired
+    private TeamMetricsService teamMetricsService;
+
+    @Scheduled(cron = "0 0 * * * ?")  // Run every hour
+    public void refreshTeamMetrics() {
+        List<FeatureTeam> teams = featureTeamRepository.findAll();
+        for (FeatureTeam team : teams) {
+            teamMetricsService.updateTeamMetrics(team);
+        }
+    }
+}
+
+4. Fetch Metrics for the Team Dashboard
+
+When rendering the team dashboard, fetch the metrics directly from the FeatureTeam entity.
+
+Repository Method:
+
+@Repository
+public interface FeatureTeamRepository extends JpaRepository<FeatureTeam, Long> {
+    Optional<FeatureTeam> findById(Long id);
+}
+
+Service Method to Fetch Metrics:
+
+@Service
+public class TeamDashboardService {
+
+    @Autowired
+    private FeatureTeamRepository featureTeamRepository;
+
+    public FeatureTeam getTeamMetrics(Long teamId) {
+        return featureTeamRepository.findById(teamId)
+                .orElseThrow(() -> new RuntimeException("Team not found: " + teamId));
+    }
+}
+
+Controller Method:
+
+@RestController
+@RequestMapping("/api/teams")
+public class TeamController {
+
+    @Autowired
+    private TeamDashboardService teamDashboardService;
+
+    @GetMapping("/{teamId}/metrics")
+    public ResponseEntity<FeatureTeam> getTeamMetrics(@PathVariable Long teamId) {
+        FeatureTeam team = teamDashboardService.getTeamMetrics(teamId);
+        return ResponseEntity.ok(team);
+    }
+}
+
+5. Frontend Integration
+	•	Call the /api/teams/{teamId}/metrics endpoint to fetch the team-level metrics.
+	•	Display the metrics (e.g., total PRs, large commits, etc.) directly on the dashboard.
+
+Advantages of Using the Existing Team Table
+	1.	Simpler Schema: No additional table is required, reducing schema complexity.
+	2.	Ease of Access: Metrics are stored directly in the Team table, making them accessible via existing relationships or APIs.
+	3.	Lower Overhead: No need to manage a separate table for metrics.
+
+Potential Limitations
+	1.	Frequent Updates: If metrics are updated frequently, this could cause contention in the Team table, especially with many concurrent reads.
+	2.	Cluttered Entity: As metrics grow, the Team entity may become harder to manage.
+
+If these limitations are manageable in your use case, using the existing Team table is a valid approach.
