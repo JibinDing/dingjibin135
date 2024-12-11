@@ -1,0 +1,181 @@
+Since you’ve decided to preaggregate and store team-level metrics, here’s a detailed plan for implementing this approach:
+
+1. Database Design for Team-Level Metrics
+
+You need to create a new table to store preaggregated data for each team. This table will contain key metrics and the timestamp of the last update.
+
+SQL Table
+
+CREATE TABLE team_metrics (
+    id SERIAL PRIMARY KEY,
+    team_id INT REFERENCES feature_team(id) ON DELETE CASCADE, -- Foreign key to the team table
+    total_closed_prs INT DEFAULT 0,
+    total_open_prs INT DEFAULT 0,
+    total_merged_prs INT DEFAULT 0,
+    total_large_commits INT DEFAULT 0,
+    last_30_days_closed_prs INT DEFAULT 0,
+    last_30_days_open_prs INT DEFAULT 0,
+    last_30_days_merged_prs INT DEFAULT 0,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+Entity Class
+
+@Entity
+@Table(name = "team_metrics")
+public class TeamMetrics {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @OneToOne
+    @JoinColumn(name = "team_id")
+    private FeatureTeam team;
+
+    private int totalClosedPrs;
+    private int totalOpenPrs;
+    private int totalMergedPrs;
+    private int totalLargeCommits;
+
+    private int last30DaysClosedPrs;
+    private int last30DaysOpenPrs;
+    private int last30DaysMergedPrs;
+
+    private LocalDateTime lastUpdated;
+
+    // Getters and Setters
+}
+
+2. Populate and Update Team Metrics
+
+Service to Calculate Metrics
+
+Create a service that aggregates repository-level metrics and updates the team_metrics table.
+
+Service Class:
+
+@Service
+public class TeamMetricsService {
+
+    @Autowired
+    private RepositoryRepository repositoryRepository;
+
+    @Autowired
+    private MetricRepository metricRepository;
+
+    @Autowired
+    private TeamMetricsRepository teamMetricsRepository;
+
+    public void updateTeamMetrics(FeatureTeam team) {
+        List<Repository> repositories = repositoryRepository.findByTeamId(team.getId());
+
+        int totalClosedPrs = 0;
+        int totalOpenPrs = 0;
+        int totalMergedPrs = 0;
+        int totalLargeCommits = 0;
+
+        int last30DaysClosedPrs = 0;
+        int last30DaysOpenPrs = 0;
+        int last30DaysMergedPrs = 0;
+
+        for (Repository repo : repositories) {
+            totalClosedPrs += metricRepository.getMetricValue(repo.getId(), "closed_prs");
+            totalOpenPrs += metricRepository.getMetricValue(repo.getId(), "open_prs");
+            totalMergedPrs += metricRepository.getMetricValue(repo.getId(), "merged_prs");
+            totalLargeCommits += metricRepository.getMetricValue(repo.getId(), "large_commits");
+
+            last30DaysClosedPrs += metricRepository.getMetricValueForLast30Days(repo.getId(), "closed_prs");
+            last30DaysOpenPrs += metricRepository.getMetricValueForLast30Days(repo.getId(), "open_prs");
+            last30DaysMergedPrs += metricRepository.getMetricValueForLast30Days(repo.getId(), "merged_prs");
+        }
+
+        TeamMetrics metrics = teamMetricsRepository.findByTeamId(team.getId())
+                .orElse(new TeamMetrics());
+        metrics.setTeam(team);
+        metrics.setTotalClosedPrs(totalClosedPrs);
+        metrics.setTotalOpenPrs(totalOpenPrs);
+        metrics.setTotalMergedPrs(totalMergedPrs);
+        metrics.setTotalLargeCommits(totalLargeCommits);
+
+        metrics.setLast30DaysClosedPrs(last30DaysClosedPrs);
+        metrics.setLast30DaysOpenPrs(last30DaysOpenPrs);
+        metrics.setLast30DaysMergedPrs(last30DaysMergedPrs);
+
+        metrics.setLastUpdated(LocalDateTime.now());
+
+        teamMetricsRepository.save(metrics);
+    }
+}
+
+Scheduled Job for Periodic Updates
+
+Use a scheduled job to refresh the metrics periodically (e.g., every hour or day).
+
+@Service
+public class MetricsRefreshJob {
+
+    @Autowired
+    private TeamMetricsService teamMetricsService;
+
+    @Autowired
+    private FeatureTeamRepository featureTeamRepository;
+
+    @Scheduled(cron = "0 0 * * * ?")  // Every hour
+    public void refreshTeamMetrics() {
+        List<FeatureTeam> teams = featureTeamRepository.findAll();
+        for (FeatureTeam team : teams) {
+            teamMetricsService.updateTeamMetrics(team);
+        }
+    }
+}
+
+3. Query Preaggregated Metrics
+
+When showing the team dashboard, you can directly fetch the precomputed metrics.
+
+Repository for Team Metrics
+
+@Repository
+public interface TeamMetricsRepository extends JpaRepository<TeamMetrics, Long> {
+    Optional<TeamMetrics> findByTeamId(Long teamId);
+}
+
+Service Method to Fetch Metrics
+
+@Service
+public class TeamDashboardService {
+
+    @Autowired
+    private TeamMetricsRepository teamMetricsRepository;
+
+    public TeamMetrics getTeamMetrics(Long teamId) {
+        return teamMetricsRepository.findByTeamId(teamId)
+                .orElseThrow(() -> new RuntimeException("Metrics not found for team: " + teamId));
+    }
+}
+
+Example Query
+
+SELECT * FROM team_metrics WHERE team_id = ?;
+
+4. Frontend Integration
+
+When building the frontend for the team dashboard:
+	1.	Fetch the preaggregated metrics via an API endpoint (e.g., /api/team/{teamId}/metrics).
+	2.	Display the statistics directly on the dashboard without additional backend calculations.
+
+5. Advantages of This Approach
+	•	Fast Retrieval: Precomputed metrics ensure minimal delay when displaying data on the team dashboard.
+	•	Reduced Load: Team-level aggregation reduces the need for repeated database joins and computations during requests.
+	•	Scalable: Works well for teams with many repositories and large data volumes.
+	•	Consistent View: Guarantees consistent statistics across users until the next refresh cycle.
+
+Next Steps
+	1.	Implement the team_metrics table and entity.
+	2.	Create and test the TeamMetricsService to aggregate data.
+	3.	Set up the scheduled job to update metrics periodically.
+	4.	Integrate the metrics retrieval in your team dashboard API.
+	5.	Test the entire flow to ensure data consistency and correct aggregation.
+
+This approach ensures efficient storage, consistent data, and fast access for team-level metrics.
