@@ -1,332 +1,161 @@
-To add the ability to store tasks and retrieve them from an H2 database in a Spring Boot project, we need to set up a backend with Spring Boot that will handle the storage and retrieval of tasks, and then connect the frontend (your HTML, CSS, and JavaScript files) to this backend using REST APIs.
+To store large commits with detailed information (such as create date, commit hash, added/deleted lines, project name), here’s how you can design and implement it.
 
-### Step-by-Step Solution
+Approach
 
-#### Step 1: Set Up the Spring Boot Project
+Similar to open pull requests, create a dedicated table for large commits. Each large commit will be stored as an individual record, with all its associated details, and linked to the team.
 
-1. **Create a Spring Boot Project**:
-   - Open IntelliJ IDEA, go to **File > New > Project**.
-   - Choose **Spring Initializr**.
-   - Provide the necessary details like Group, Artifact, and Project Name.
-   - Add dependencies:
-     - **Spring Web** (for building REST APIs)
-     - **Spring Data JPA** (for interacting with the database)
-     - **H2 Database** (for in-memory database)
+Step 1: Database Schema
 
-2. **Project Structure**:
-   - Your project should have a structure similar to:
-     ```
-     └── src
-         ├── main
-         │   ├── java
-         │   │   └── com.example.demo
-         │   │       ├── controller
-         │   │       ├── model
-         │   │       ├── repository
-         │   │       └── service
-         │   └── resources
-         │       ├── static
-         │       │   ├── index.html
-         │       │   ├── styles.css
-         │       │   └── scripts.js
-         │       └── application.properties
-     ```
+large_commit Table
 
-#### Step 2: Define the Task Model
+This table will store details of large commits associated with team repositories.
 
-Create a new class `Task` in the `model` package:
+CREATE TABLE large_commit (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,  -- Unique identifier for the record
+    project_id BIGINT NOT NULL,            -- Repository ID
+    project_name VARCHAR(255),             -- Repository name
+    commit_hash VARCHAR(255) NOT NULL,     -- Unique hash of the commit
+    create_date TIMESTAMP NOT NULL,        -- Commit creation date
+    added_lines INT DEFAULT 0,             -- Number of lines added in the commit
+    deleted_lines INT DEFAULT 0,           -- Number of lines deleted in the commit
+    team_id BIGINT NOT NULL,               -- Foreign key to associate with a team
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- Last sync time
+    FOREIGN KEY (team_id) REFERENCES feature_team(id)  -- Relation to the feature_team table
+);
 
-```java
-package com.example.demo.model;
+Step 2: Entity Class
 
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
+Define an LargeCommit entity in your backend:
 
 @Entity
-public class Task {
+@Table(name = "large_commit")
+public class LargeCommit {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-    private String text;
-    private boolean completed;
 
-    // Constructors
-    public Task() {}
+    private Long projectId;                 // Repository ID
+    private String projectName;             // Repository name
+    private String commitHash;              // Commit hash
+    private LocalDateTime createDate;       // Commit creation date
+    private int addedLines;                 // Lines added
+    private int deletedLines;               // Lines deleted
 
-    public Task(String text, boolean completed) {
-        this.text = text;
-        this.completed = completed;
-    }
+    @ManyToOne
+    @JoinColumn(name = "team_id", nullable = false)
+    private FeatureTeam team;               // Relation to FeatureTeam entity
 
-    // Getters and Setters
-    public Long getId() {
-        return id;
-    }
+    private LocalDateTime lastUpdated;      // Data freshness timestamp
 
-    public void setId(Long id) {
-        this.id = id;
-    }
-
-    public String getText() {
-        return text;
-    }
-
-    public void setText(String text) {
-        this.text = text;
-    }
-
-    public boolean isCompleted() {
-        return completed;
-    }
-
-    public void setCompleted(boolean completed) {
-        this.completed = completed;
-    }
+    // Getters and setters
 }
-```
 
-#### Step 3: Create the Task Repository
+Step 3: Repository
 
-Create an interface `TaskRepository` in the `repository` package:
-
-```java
-package com.example.demo.repository;
-
-import com.example.demo.model.Task;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.stereotype.Repository;
+Create a repository interface for LargeCommit to handle CRUD operations.
 
 @Repository
-public interface TaskRepository extends JpaRepository<Task, Long> {
+public interface LargeCommitRepository extends JpaRepository<LargeCommit, Long> {
+    List<LargeCommit> findByTeamId(Long teamId);
+    List<LargeCommit> findByProjectId(Long projectId);
 }
-```
 
-#### Step 4: Create the Task Service
+Step 4: Sync Service
 
-Create a class `TaskService` in the `service` package to handle the business logic:
-
-```java
-package com.example.demo.service;
-
-import com.example.demo.model.Task;
-import com.example.demo.repository.TaskRepository;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-
-import java.util.List;
+Implement a service to:
+	1.	Fetch large commits from repositories in a team.
+	2.	Identify large commits based on thresholds (e.g., added_lines + deleted_lines > 1000).
+	3.	Save or update these records in the large_commit table.
 
 @Service
-public class TaskService {
+public class LargeCommitSyncService {
 
     @Autowired
-    private TaskRepository taskRepository;
+    private LargeCommitRepository largeCommitRepository;
 
-    public List<Task> getAllTasks() {
-        return taskRepository.findAll();
-    }
+    @Autowired
+    private GitLabApiService gitLabApiService;
 
-    public Task saveTask(Task task) {
-        return taskRepository.save(task);
-    }
+    public void syncLargeCommits(FeatureTeam team) {
+        // Fetch repositories for the team
+        List<Repository> repositories = gitLabApiService.getRepositoriesByTeam(team.getId());
 
-    public void deleteTask(Long id) {
-        taskRepository.deleteById(id);
-    }
+        for (Repository repo : repositories) {
+            // Fetch commits for the repository
+            List<Commit> commits = gitLabApiService.getCommits(repo.getId());
 
-    public Task completeTask(Long id) {
-        Task task = taskRepository.findById(id).orElse(null);
-        if (task != null) {
-            task.setCompleted(true);
-            return taskRepository.save(task);
+            for (Commit commit : commits) {
+                // Check if the commit qualifies as a large commit
+                if (commit.getAddedLines() + commit.getDeletedLines() > 1000) {
+                    // Check if the commit already exists
+                    LargeCommit largeCommit = largeCommitRepository
+                            .findByProjectIdAndCommitHash(repo.getId(), commit.getHash())
+                            .orElse(new LargeCommit());
+
+                    // Update or create new record
+                    largeCommit.setProjectId(repo.getId());
+                    largeCommit.setProjectName(repo.getName());
+                    largeCommit.setCommitHash(commit.getHash());
+                    largeCommit.setCreateDate(commit.getCreateDate());
+                    largeCommit.setAddedLines(commit.getAddedLines());
+                    largeCommit.setDeletedLines(commit.getDeletedLines());
+                    largeCommit.setTeam(team);
+                    largeCommit.setLastUpdated(LocalDateTime.now());
+
+                    // Save to database
+                    largeCommitRepository.save(largeCommit);
+                }
+            }
         }
-        return null;
     }
 }
-```
 
-#### Step 5: Create the Task Controller
+Step 5: Scheduled Job to Refresh Data
 
-Create a REST controller `TaskController` in the `controller` package:
+Set up a scheduled job to periodically refresh large commit data for all teams.
 
-```java
-package com.example.demo.controller;
+@Service
+public class MetricsRefreshJob {
 
-import com.example.demo.model.Task;
-import com.example.demo.service.TaskService;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.*;
+    @Autowired
+    private FeatureTeamRepository featureTeamRepository;
 
-import java.util.List;
+    @Autowired
+    private LargeCommitSyncService largeCommitSyncService;
+
+    @Scheduled(cron = "0 0 * * * ?")  // Run every hour
+    public void refreshLargeCommitData() {
+        // Fetch all teams
+        List<FeatureTeam> teams = featureTeamRepository.findAll();
+
+        for (FeatureTeam team : teams) {
+            // Sync large commits for the team
+            largeCommitSyncService.syncLargeCommits(team);
+        }
+    }
+}
+
+Step 6: API Endpoints
+
+Create API endpoints to:
+	1.	Fetch large commit data for a team.
+	2.	Fetch large commits for a specific repository if needed.
+
+Controller Example:
 
 @RestController
-@RequestMapping("/api/tasks")
-public class TaskController {
+@RequestMapping("/api/teams")
+public class LargeCommitController {
 
     @Autowired
-    private TaskService taskService;
+    private LargeCommitRepository largeCommitRepository;
 
-    @GetMapping
-    public List<Task> getTasks() {
-        return taskService.getAllTasks();
+    @GetMapping("/{teamId}/large-commits")
+    public List<LargeCommit> getLargeCommitsByTeam(@PathVariable Long teamId) {
+        return largeCommitRepository.findByTeamId(teamId);
     }
 
-    @PostMapping
-    public Task addTask(@RequestBody Task task) {
-        return taskService.saveTask(task);
-    }
-
-    @DeleteMapping("/{id}")
-    public void deleteTask(@PathVariable Long id) {
-        taskService.deleteTask(id);
-    }
-
-    @PutMapping("/{id}/complete")
-    public Task completeTask(@PathVariable Long id) {
-        return taskService.completeTask(id);
-    }
-}
-```
-
-#### Step 6: Configure the H2 Database
-
-Open the `application.properties` file and configure the H2 database:
-
-```properties
-# H2 Database Configuration
-spring.datasource.url=jdbc:h2:mem:testdb
-spring.datasource.driverClassName=org.h2.Driver
-spring.datasource.username=sa
-spring.datasource.password=password
-spring.jpa.database-platform=org.hibernate.dialect.H2Dialect
-spring.h2.console.enabled=true
-```
-
-#### Step 7: Update the Frontend JavaScript to Use REST APIs
-
-Open the `scripts.js` file and update it to use the REST APIs for managing tasks:
-
-```javascript
-document.addEventListener('DOMContentLoaded', function () {
-    const addTaskBtn = document.getElementById('add-task-btn');
-    const newTaskInput = document.getElementById('new-task');
-    const taskList = document.getElementById('task-list');
-    const totalTasksElem = document.getElementById('total-tasks');
-    const completedTasksElem = document.getElementById('completed-tasks');
-
-    // Fetch tasks from server
-    function fetchTasks() {
-        fetch('/api/tasks')
-            .then(response => response.json())
-            .then(data => {
-                tasks = data;
-                renderTasks();
-            });
-    }
-
-    function renderTasks() {
-        taskList.innerHTML = '';
-
-        tasks.forEach((task) => {
-            const taskItem = document.createElement('li');
-            taskItem.setAttribute('draggable', 'true');
-            taskItem.classList.add('task-item');
-            if (task.completed) taskItem.classList.add('completed');
-
-            const taskText = document.createElement('span');
-            taskText.classList.add('task');
-            taskText.textContent = task.text;
-
-            const completedLabel = document.createElement('span');
-            completedLabel.textContent = task.completed ? ' (Completed)' : '';
-            completedLabel.style.color = 'green'; 
-
-            const completeBtn = document.createElement('button');
-            completeBtn.textContent = 'Complete';
-            completeBtn.classList.add('complete-btn');
-            completeBtn.disabled = task.completed; 
-            completeBtn.addEventListener('click', () => completeTask(task.id));
-
-            const deleteBtn = document.createElement('button');
-            deleteBtn.textContent = 'Delete';
-            deleteBtn.classList.add('delete-btn');
-            deleteBtn.addEventListener('click', () => deleteTask(task.id));
-
-            taskItem.appendChild(taskText);
-            taskItem.appendChild(completedLabel);
-            taskItem.appendChild(completeBtn);
-            taskItem.appendChild(deleteBtn);
-
-            taskList.appendChild(taskItem);
-
-            taskItem.addEventListener('dragstart', (e) => dragStart(e, task.id));
-            taskItem.addEventListener('dragover', dragOver);
-            taskItem.addEventListener('drop', (e) => drop(e, task.id));
-        });
-
-        updateSummary();
-    }
-
-    function addTask() {
-        const taskText = newTaskInput.value.trim();
-        if (taskText) {
-            fetch('/api/tasks', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: taskText, completed: false })
-            })
-            .then(fetchTasks);
-            newTaskInput.value = '';
-        }
-    }
-
-    function deleteTask(id) {
-        fetch(`/api/tasks/${id}`, { method: 'DELETE' })
-            .then(fetchTasks);
-    }
-
-    function completeTask(id) {
-        fetch(`/api/tasks/${id}/complete`, { method: 'PUT' })
-            .then(fetchTasks);
-    }
-
-    function updateSummary() {
-        totalTasksElem.textContent = tasks.length;
-        completedTasksElem.textContent = tasks.filter((task) => task.completed).length;
-    }
-
-    let draggedItemIndex = null;
-
-    function dragStart(e, id) {
-        draggedItemIndex = id;
-        e.dataTransfer.effectAllowed = 'move';
-    }
-
-    function dragOver(e) {
-        e.preventDefault();
-    }
-
-    function drop(e, id) {
-        e.preventDefault();
-        // Handle reordering if needed
-    }
-
-    addTaskBtn.addEventListener('click', addTask);
-    newTaskInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') addTask();
-    });
-
-    fetchTasks(); // Load tasks on page load
-});
-```
-
-#### Step 8: Run the Spring Boot Application
-
-1. **Run the Application**: Right-click on the main class (e.g., `DemoApplication.java`) and select **Run**.
-2. **Access the H2 Console**: Open your browser and go to `http://localhost:8080/h2-console` to view and manage your database.
-
-#### Step 9: Test the Application
-
-1. **Open `index.html` in the browser**: Go to `http
+    @GetMapping("/{teamId}/repositories/{repositoryId}/large-commits")
+    public List<LargeCommit> getLargeCommitsByRepository(
+            @PathVariable Long teamId, @Path
