@@ -1,116 +1,178 @@
-Both approaches have their pros and cons, and the choice depends on factors such as performance, data consistency, and the frequency of updates. Here’s a breakdown of the two approaches to help you decide:
+If you want to store detailed data for individual open pull requests to display on the dashboard, follow this approach:
 
-Option 1: Store All-Time Statistics for Each Repository and Aggregate When Displaying
+Approach
 
-How It Works
+We will create a dedicated table for open pull requests to store the detailed information while associating it with a team. This allows you to:
+	•	Retain individual details (e.g., title, open duration, approvals).
+	•	Query or display these details in a user-friendly format.
+	•	Aggregate this data for team-level metrics when needed.
 
-	•	Store all-time statistics (e.g., number of PRs, large commits, etc.) for each repository in the database.
-	•	When displaying team-level statistics, aggregate these values in real time by summing up the statistics for all repositories of the team.
+Step 1: Database Schema
 
-Advantages
+open_pull_request Table
 
-	1.	Accuracy:
-	•	Data is always up-to-date because it’s derived directly from the repository statistics.
-	•	No risk of inconsistencies in pre-aggregated data.
-	2.	Flexibility:
-	•	You can easily adjust the aggregation logic (e.g., filter by date range or specific repositories) without needing to modify stored data.
-	3.	Storage Efficiency:
-	•	Avoids storing duplicate aggregated data for teams.
-	4.	Simpler Updates:
-	•	When repository-level statistics change, you only need to update the repository data, not team-level aggregations.
+This table stores detailed information about individual open pull requests for a team.
 
-Disadvantages
-
-	1.	Performance Overhead:
-	•	Aggregating statistics for teams requires more computation, especially if the team has many repositories.
-	•	May impact performance for large datasets or frequent requests.
-	2.	Database Load:
-	•	Increases the load on the database when querying team-level statistics in real time.
-
-Use Case
-
-	•	Suitable if team statistics are not requested frequently or if your system can handle the computational load.
-
-Option 2: Pre-Aggregate and Store Team-Level Statistics
-
-How It Works
-
-	•	Periodically calculate and store aggregated team-level statistics based on repository data.
-	•	When displaying team data, fetch the pre-aggregated result directly.
-
-Advantages
-
-	1.	Fast Retrieval:
-	•	Team-level statistics are precomputed, so displaying them is instantaneous.
-	•	Ideal for dashboards where performance is critical.
-	2.	Reduced Query Complexity:
-	•	Simplifies queries for team statistics since aggregation is not required at query time.
-	3.	Lower Database Load:
-	•	Reduces computational load on the database during user requests.
-
-Disadvantages
-
-	1.	Data Consistency:
-	•	Risk of stale or inconsistent data if repository statistics change but the aggregated values are not updated promptly.
-	2.	Update Complexity:
-	•	Requires additional logic to ensure team-level statistics are updated whenever repository data changes.
-	3.	Increased Storage:
-	•	Requires additional storage for team-level statistics, which may lead to redundancy.
-
-Use Case
-
-	•	Suitable if team statistics are requested frequently or need to be displayed with minimal latency (e.g., in high-traffic dashboards).
-
-Recommendation
-
-The better approach depends on your specific needs:
-
-Choose Option 1 (Store Repository-Level Statistics Only) If:
-
-	•	Accuracy is critical (e.g., you need real-time, up-to-date statistics).
-	•	Your system can handle the additional computational overhead during requests.
-	•	You anticipate needing flexibility to calculate different team-level metrics dynamically (e.g., by filtering repositories or dates).
-
-Choose Option 2 (Pre-Aggregate Team-Level Statistics) If:
-
-	•	Performance and response time are critical (e.g., high-traffic dashboards).
-	•	Team statistics change infrequently, and you can afford periodic updates.
-	•	Your system prioritizes reduced database load over real-time accuracy.
-
-Hybrid Approach
-
-If neither approach fully satisfies your requirements, consider a hybrid approach:
-	1.	Store repository-level statistics.
-	2.	Pre-aggregate team-level statistics periodically (e.g., via a scheduled job or event-driven updates).
-	3.	Use the pre-aggregated data for fast responses but fall back to dynamic aggregation if necessary (e.g., for real-time updates).
-
-Example Implementation for Pre-Aggregation (Option 2):
-
-	•	Team-Level Aggregated Table:
-
-CREATE TABLE team_aggregates (
-    team_id INT PRIMARY KEY,
-    total_closed_prs INT,
-    total_open_prs INT,
-    total_large_commits INT,
-    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE open_pull_request (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,  -- Unique identifier for the record
+    project_id BIGINT NOT NULL,            -- Repository ID
+    project_name VARCHAR(255),             -- Repository name
+    merge_request_id BIGINT NOT NULL,      -- Unique ID for the pull/merge request
+    merge_request_title VARCHAR(255),      -- Title of the pull/merge request
+    open_duration_days INT NOT NULL,       -- Number of days the request has been open
+    approvals_required INT DEFAULT 0,      -- Approvals required for the pull request
+    approvals INT DEFAULT 0,               -- Current number of approvals
+    team_id BIGINT NOT NULL,               -- Foreign key to associate with a team
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- Last sync time
+    FOREIGN KEY (team_id) REFERENCES feature_team(id)  -- Relation to the feature_team table
 );
 
+Step 2: Entity Class
 
-	•	Scheduled Job to Update Aggregates:
+Create an OpenPullRequest entity in your backend:
 
-@Scheduled(cron = "0 0 * * * ?")  // Every hour
-public void updateTeamAggregates() {
-    List<FeatureTeam> teams = featureTeamRepository.findAll();
-    for (FeatureTeam team : teams) {
-        TeamAggregates aggregates = metricService.calculateTeamAggregates(team);
-        teamAggregateRepository.save(aggregates);
+@Entity
+@Table(name = "open_pull_request")
+public class OpenPullRequest {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private Long projectId;                 // Repository ID
+    private String projectName;             // Repository name
+    private Long mergeRequestId;            // Pull/Merge request ID
+    private String mergeRequestTitle;       // Title of the pull/merge request
+    private int openDurationDays;           // Open duration (in days)
+    private int approvalsRequired;          // Required approvals
+    private int approvals;                  // Current number of approvals
+
+    @ManyToOne
+    @JoinColumn(name = "team_id", nullable = false)
+    private FeatureTeam team;               // Relation to FeatureTeam entity
+
+    private LocalDateTime lastUpdated;      // Data freshness timestamp
+
+    // Getters and setters
+}
+
+Step 3: Repository
+
+Create a repository interface for OpenPullRequest to handle CRUD operations.
+
+@Repository
+public interface OpenPullRequestRepository extends JpaRepository<OpenPullRequest, Long> {
+    List<OpenPullRequest> findByTeamId(Long teamId);
+    Optional<OpenPullRequest> findByMergeRequestId(Long mergeRequestId);
+}
+
+Step 4: Sync Service
+
+Implement a service to:
+	1.	Fetch open pull requests for repositories in a team.
+	2.	Update the open_pull_request table with the latest data.
+
+@Service
+public class OpenPullRequestSyncService {
+
+    @Autowired
+    private OpenPullRequestRepository openPullRequestRepository;
+
+    @Autowired
+    private GitLabApiService gitLabApiService;
+
+    public void syncOpenPullRequests(FeatureTeam team) {
+        // Fetch repositories for the team
+        List<Repository> repositories = gitLabApiService.getRepositoriesByTeam(team.getId());
+
+        for (Repository repo : repositories) {
+            // Fetch open pull requests for the repository
+            List<PullRequest> openPullRequests = gitLabApiService.getOpenPullRequests(repo.getId());
+
+            for (PullRequest pr : openPullRequests) {
+                // Check if the pull request already exists
+                OpenPullRequest openPullRequest = openPullRequestRepository
+                        .findByMergeRequestId(pr.getId())
+                        .orElse(new OpenPullRequest());
+
+                // Update or create new record
+                openPullRequest.setProjectId(repo.getId());
+                openPullRequest.setProjectName(repo.getName());
+                openPullRequest.setMergeRequestId(pr.getId());
+                openPullRequest.setMergeRequestTitle(pr.getTitle());
+                openPullRequest.setOpenDurationDays(pr.getOpenDurationDays());
+                openPullRequest.setApprovalsRequired(pr.getApprovalsRequired());
+                openPullRequest.setApprovals(pr.getApprovals());
+                openPullRequest.setTeam(team);
+                openPullRequest.setLastUpdated(LocalDateTime.now());
+
+                // Save to database
+                openPullRequestRepository.save(openPullRequest);
+            }
+        }
     }
 }
 
+Step 5: Scheduled Job to Refresh Data
 
-	•	Fetching Data:
-	•	Use the team_aggregates table for most requests.
-	•	Optionally aggregate in real-time if fresh data is needed.
+Set up a scheduled job to periodically sync open pull request data for all teams.
 
-This hybrid approach balances performance and flexibility, ensuring fast retrieval while maintaining the ability to display up-to-date statistics when required.
+@Service
+public class MetricsRefreshJob {
+
+    @Autowired
+    private FeatureTeamRepository featureTeamRepository;
+
+    @Autowired
+    private OpenPullRequestSyncService openPullRequestSyncService;
+
+    @Scheduled(cron = "0 0 * * * ?")  // Run every hour
+    public void refreshOpenPullRequestData() {
+        // Fetch all teams
+        List<FeatureTeam> teams = featureTeamRepository.findAll();
+
+        for (FeatureTeam team : teams) {
+            // Sync open pull requests for the team
+            openPullRequestSyncService.syncOpenPullRequests(team);
+        }
+    }
+}
+
+Step 6: API Endpoints
+
+Create API endpoints to:
+	1.	Fetch detailed open pull request data for a team.
+	2.	Fetch aggregated open pull request metrics for a team.
+
+Controller Example:
+
+@RestController
+@RequestMapping("/api/teams")
+public class OpenPullRequestController {
+
+    @Autowired
+    private OpenPullRequestRepository openPullRequestRepository;
+
+    @GetMapping("/{teamId}/open-pull-requests")
+    public List<OpenPullRequest> getOpenPullRequests(@PathVariable Long teamId) {
+        return openPullRequestRepository.findByTeamId(teamId);
+    }
+}
+
+Step 7: Frontend Integration
+	1.	Fetch Data:
+	•	Use the /api/teams/{teamId}/open-pull-requests endpoint to get detailed pull request data for the team.
+	2.	Display Data:
+	•	Create a table or card layout to display details like:
+	•	Pull request title.
+	•	Repository name.
+	•	Open duration.
+	•	Approvals required vs. approvals received.
+	3.	Pagination and Filtering:
+	•	Add pagination or filters (e.g., by project name or open duration) for better usability.
+
+Benefits of Storing Detailed Open Pull Request Data
+	1.	Flexibility: Enables detailed views and queries for individual pull requests.
+	2.	Dashboard Ready: Easily display detailed information on the frontend.
+	3.	Aggregation: You can aggregate data (e.g., total open requests, average duration) when required without recalculating from scratch.
+	4.	History Tracking: Retain historical pull request data if required for audit or trend analysis.
