@@ -1,0 +1,25 @@
+@Entity
+@Table(name = "team_metrics")
+public class TeamMetrics {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @OneToOne
+    @JoinColumn(name = "team_id", nullable = false)
+    private FeatureTeam team;
+
+    private int gitlabNumber;
+    private int bitbucketNumber;
+    private int openPrs;
+    private int totalClosedPrs;
+    private int totalMergedPrs;
+    private int last30DaysClosedPrs;
+    private int last30DaysMergedPrs;
+
+    @Column(name = "last_updated")
+    private LocalDateTime lastUpdated;
+
+    // Getters and Setters
+}
