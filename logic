@@ -1,3 +1,8 @@
+Below is the code for the entity classes, repositories, and update logic based on the schema you’ve provided for the team_metrics, open_pull_request, and large_commit tables.
+
+Entity Classes
+	1.	TeamMetrics Entity
+
 @Entity
 @Table(name = "team_metrics")
 public class TeamMetrics {
@@ -23,3 +28,204 @@ public class TeamMetrics {
 
     // Getters and Setters
 }
+
+	2.	OpenPullRequest Entity
+
+@Entity
+@Table(name = "open_pull_request")
+public class OpenPullRequest {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne
+    @JoinColumn(name = "team_id", nullable = false)
+    private FeatureTeam team;
+
+    private Long projectId;
+    private String projectName;
+    private Long mergeRequestId;
+    private String mergeRequestTitle;
+    private int openDurationDays;
+    private int approvalsRequired;
+    private int approvals;
+
+    @Column(name = "last_updated")
+    private LocalDateTime lastUpdated;
+
+    // Getters and Setters
+}
+
+	3.	LargeCommit Entity
+
+@Entity
+@Table(name = "large_commit")
+public class LargeCommit {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne
+    @JoinColumn(name = "team_id", nullable = false)
+    private FeatureTeam team;
+
+    private Long projectId;
+    private String projectName;
+    private String commitHash;
+    private LocalDateTime createDate;
+    private int addedLines;
+    private int deletedLines;
+
+    @Column(name = "last_updated")
+    private LocalDateTime lastUpdated;
+
+    // Getters and Setters
+}
+
+Repository Interfaces
+	1.	TeamMetrics Repository
+
+@Repository
+public interface TeamMetricsRepository extends JpaRepository<TeamMetrics, Long> {
+    Optional<TeamMetrics> findByTeamId(Long teamId);
+}
+
+	2.	OpenPullRequest Repository
+
+@Repository
+public interface OpenPullRequestRepository extends JpaRepository<OpenPullRequest, Long> {
+    List<OpenPullRequest> findByTeamId(Long teamId);
+    Optional<OpenPullRequest> findByMergeRequestId(Long mergeRequestId);
+}
+
+	3.	LargeCommit Repository
+
+@Repository
+public interface LargeCommitRepository extends JpaRepository<LargeCommit, Long> {
+    List<LargeCommit> findByTeamId(Long teamId);
+    Optional<LargeCommit> findByCommitHash(String commitHash);
+}
+
+Update Logic
+
+1. TeamMetrics Update Service
+
+@Service
+public class TeamMetricsService {
+
+    @Autowired
+    private TeamMetricsRepository teamMetricsRepository;
+
+    public void updateTeamMetrics(FeatureTeam team, TeamMetrics metrics) {
+        TeamMetrics existingMetrics = teamMetricsRepository.findByTeamId(team.getId())
+                .orElse(new TeamMetrics());
+
+        existingMetrics.setTeam(team);
+        existingMetrics.setGitlabNumber(metrics.getGitlabNumber());
+        existingMetrics.setBitbucketNumber(metrics.getBitbucketNumber());
+        existingMetrics.setOpenPrs(metrics.getOpenPrs());
+        existingMetrics.setTotalClosedPrs(metrics.getTotalClosedPrs());
+        existingMetrics.setTotalMergedPrs(metrics.getTotalMergedPrs());
+        existingMetrics.setLast30DaysClosedPrs(metrics.getLast30DaysClosedPrs());
+        existingMetrics.setLast30DaysMergedPrs(metrics.getLast30DaysMergedPrs());
+        existingMetrics.setLastUpdated(LocalDateTime.now());
+
+        teamMetricsRepository.save(existingMetrics);
+    }
+}
+
+2. OpenPullRequest Update Service
+
+@Service
+public class OpenPullRequestService {
+
+    @Autowired
+    private OpenPullRequestRepository openPullRequestRepository;
+
+    public void updateOpenPullRequest(OpenPullRequest pullRequest) {
+        OpenPullRequest existingRequest = openPullRequestRepository
+                .findByMergeRequestId(pullRequest.getMergeRequestId())
+                .orElse(new OpenPullRequest());
+
+        existingRequest.setTeam(pullRequest.getTeam());
+        existingRequest.setProjectId(pullRequest.getProjectId());
+        existingRequest.setProjectName(pullRequest.getProjectName());
+        existingRequest.setMergeRequestId(pullRequest.getMergeRequestId());
+        existingRequest.setMergeRequestTitle(pullRequest.getMergeRequestTitle());
+        existingRequest.setOpenDurationDays(pullRequest.getOpenDurationDays());
+        existingRequest.setApprovalsRequired(pullRequest.getApprovalsRequired());
+        existingRequest.setApprovals(pullRequest.getApprovals());
+        existingRequest.setLastUpdated(LocalDateTime.now());
+
+        openPullRequestRepository.save(existingRequest);
+    }
+}
+
+3. LargeCommit Update Service
+
+@Service
+public class LargeCommitService {
+
+    @Autowired
+    private LargeCommitRepository largeCommitRepository;
+
+    public void updateLargeCommit(LargeCommit commit) {
+        LargeCommit existingCommit = largeCommitRepository
+                .findByCommitHash(commit.getCommitHash())
+                .orElse(new LargeCommit());
+
+        existingCommit.setTeam(commit.getTeam());
+        existingCommit.setProjectId(commit.getProjectId());
+        existingCommit.setProjectName(commit.getProjectName());
+        existingCommit.setCommitHash(commit.getCommitHash());
+        existingCommit.setCreateDate(commit.getCreateDate());
+        existingCommit.setAddedLines(commit.getAddedLines());
+        existingCommit.setDeletedLines(commit.getDeletedLines());
+        existingCommit.setLastUpdated(LocalDateTime.now());
+
+        largeCommitRepository.save(existingCommit);
+    }
+}
+
+Scheduler for Data Sync
+
+Create a scheduled job to periodically update all metrics for teams.
+
+@Service
+public class MetricsRefreshJob {
+
+    @Autowired
+    private FeatureTeamRepository featureTeamRepository;
+
+    @Autowired
+    private TeamMetricsService teamMetricsService;
+
+    @Autowired
+    private OpenPullRequestService openPullRequestService;
+
+    @Autowired
+    private LargeCommitService largeCommitService;
+
+    @Scheduled(cron = "0 0 * * * ?") // Every hour
+    public void refreshMetrics() {
+        List<FeatureTeam> teams = featureTeamRepository.findAll();
+
+        for (FeatureTeam team : teams) {
+            // Fetch and update team metrics
+            TeamMetrics metrics = fetchTeamMetrics(team);
+            teamMetricsService.updateTeamMetrics(team, metrics);
+
+            // Fetch and update open pull requests
+            List<OpenPullRequest> openPullRequests = fetchOpenPullRequests(team);
+            openPullRequests.forEach(openPullRequestService::updateOpenPullRequest);
+
+            // Fetch and update large commits
+            List<LargeCommit> largeCommits = fetchLargeCommits(team);
+            largeCommits.forEach(largeCommitService::updateLargeCommit);
+        }
+    }
+}
+
+This structure ensures that your data is modular, extensible, and easily manageable while keeping team-specific data linked to the appropriate entities. Let me know if you need further assistance!
