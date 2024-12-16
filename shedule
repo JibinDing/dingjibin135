@@ -1,0 +1,228 @@
+Here’s a detailed guide for implementing Scheduled Jobs to refresh your team-level aggregated data using Spring Boot and Java. This method ensures that your team_metrics, open_pull_request, and large_commit tables are updated periodically.
+
+1. Prerequisites
+
+Add Dependencies
+
+Ensure your project includes the necessary dependencies for scheduling and database interaction:
+
+Maven Dependencies:
+
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-jpa</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-web</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter</artifactId>
+</dependency>
+
+Enable Scheduling:
+In your main Spring Boot application class, annotate it with @EnableScheduling:
+
+@SpringBootApplication
+@EnableScheduling
+public class AggregationApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(AggregationApplication.class, args);
+    }
+}
+
+2. Create the Scheduled Job Service
+
+Here is the implementation of a scheduled job that aggregates data for all teams:
+
+DataAggregationService (Core Class)
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Service
+public class DataAggregationService {
+
+    @Autowired
+    private TeamRepository teamRepository;
+
+    @Autowired
+    private TeamMetricsService teamMetricsService;
+
+    @Autowired
+    private OpenPullRequestService openPullRequestService;
+
+    @Autowired
+    private LargeCommitService largeCommitService;
+
+    // Scheduled Job: Runs at the top of every hour (0 0 * * * ?)
+    @Scheduled(cron = "0 0 * * * ?")
+    public void refreshTeamLevelData() {
+        System.out.println("Starting team data aggregation: " + LocalDateTime.now());
+        List<Team> allTeams = teamRepository.findAll();
+
+        for (Team team : allTeams) {
+            try {
+                // Step 1: Aggregate and update team metrics
+                teamMetricsService.refreshTeamMetrics(team);
+
+                // Step 2: Refresh open pull request details
+                openPullRequestService.refreshOpenPullRequests(team);
+
+                // Step 3: Refresh large commit details
+                largeCommitService.refreshLargeCommits(team);
+
+                System.out.println("Data refreshed successfully for team: " + team.getId());
+            } catch (Exception e) {
+                System.err.println("Error refreshing data for team: " + team.getId());
+                e.printStackTrace();
+            }
+        }
+
+        System.out.println("Team data aggregation completed: " + LocalDateTime.now());
+    }
+}
+
+3. Implement Services for Aggregation
+
+The job relies on helper services to fetch, calculate, and persist the updated data for each team.
+
+3.1. TeamMetricsService
+
+This service aggregates and updates team metrics into the team_metrics table:
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+@Service
+public class TeamMetricsService {
+
+    @Autowired
+    private TeamMetricsRepository teamMetricsRepository;
+
+    @Autowired
+    private PullRequestRepository pullRequestRepository;
+
+    public void refreshTeamMetrics(Team team) {
+        int totalOpenPrs = pullRequestRepository.countOpenPRsByTeam(team.getId());
+        int totalClosedPrs = pullRequestRepository.countClosedPRsByTeam(team.getId());
+        int totalMergedPrs = pullRequestRepository.countMergedPRsByTeam(team.getId());
+        int last30DaysClosedPrs = pullRequestRepository.countClosedPRsInLast30Days(team.getId());
+        int last30DaysMergedPrs = pullRequestRepository.countMergedPRsInLast30Days(team.getId());
+
+        TeamMetrics metrics = teamMetricsRepository.findByTeamId(team.getId())
+                .orElse(new TeamMetrics());
+
+        metrics.setTeamId(team.getId());
+        metrics.setOpenPrs(totalOpenPrs);
+        metrics.setTotalClosedPrs(totalClosedPrs);
+        metrics.setTotalMergedPrs(totalMergedPrs);
+        metrics.setLast30DaysClosedPrs(last30DaysClosedPrs);
+        metrics.setLast30DaysMergedPrs(last30DaysMergedPrs);
+        metrics.setLastUpdated(LocalDateTime.now());
+
+        teamMetricsRepository.save(metrics);
+    }
+}
+
+3.2. OpenPullRequestService
+
+This service fetches and updates detailed open pull request data:
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+
+@Service
+public class OpenPullRequestService {
+
+    @Autowired
+    private PullRequestRepository pullRequestRepository;
+
+    @Autowired
+    private OpenPullRequestRepository openPullRequestRepository;
+
+    public void refreshOpenPullRequests(Team team) {
+        // Fetch all open PRs for this team
+        List<OpenPullRequest> openPRs = pullRequestRepository.fetchOpenPullRequestsByTeam(team.getId());
+
+        // Remove old entries and save new entries
+        openPullRequestRepository.deleteByTeamId(team.getId());
+        openPullRequestRepository.saveAll(openPRs);
+    }
+}
+
+3.3. LargeCommitService
+
+This service fetches and updates details of large commits:
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+
+@Service
+public class LargeCommitService {
+
+    @Autowired
+    private CommitRepository commitRepository;
+
+    @Autowired
+    private LargeCommitRepository largeCommitRepository;
+
+    public void refreshLargeCommits(Team team) {
+        // Fetch large commits for this team
+        List<LargeCommit> largeCommits = commitRepository.fetchLargeCommitsByTeam(team.getId());
+
+        // Remove old entries and save new ones
+        largeCommitRepository.deleteByTeamId(team.getId());
+        largeCommitRepository.saveAll(largeCommits);
+    }
+}
+
+4. Example Repository Methods
+
+Repositories to fetch aggregated data can use custom queries:
+
+PullRequestRepository
+
+@Query("SELECT COUNT(p) FROM PullRequest p WHERE p.teamId = :teamId AND p.status = 'OPEN'")
+int countOpenPRsByTeam(@Param("teamId") int teamId);
+
+@Query("SELECT p FROM PullRequest p WHERE p.teamId = :teamId AND p.status = 'OPEN'")
+List<OpenPullRequest> fetchOpenPullRequestsByTeam(@Param("teamId") int teamId);
+
+CommitRepository
+
+@Query("SELECT c FROM Commit c WHERE c.teamId = :teamId AND c.addedLines > 500")
+List<LargeCommit> fetchLargeCommitsByTeam(@Param("teamId") int teamId);
+
+5. Configuration for Cron Job
+
+In the application.properties file, configure timezone and scheduler thread pool:
+
+spring.task.scheduling.pool.size=5
+spring.task.scheduling.thread-name-prefix=scheduler-
+spring.timezone=UTC
+
+6. Testing and Monitoring
+	1.	Test the Job: Run the application and verify that the scheduled job executes as expected every hour.
+	2.	Logging: Ensure the logs show job execution details.
+	3.	Monitoring: Use tools like Prometheus or Grafana to monitor the scheduler performance.
+
+Summary
+	1.	Define a scheduled job using @Scheduled annotation.
+	2.	Split the logic into services for:
+	•	Team-level metrics aggregation.
+	•	Open pull request updates.
+	•	Large commit updates.
+	3.	Optimize database operations using batch updates.
+	4.	Configure cron jobs for hourly (or appropriate) frequency.
+
+This approach ensures your dashboard data remains consistent and up-to-date. Let me know if you need more details or help with implementing a specific part!
