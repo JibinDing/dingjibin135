@@ -1,0 +1,146 @@
+To refresh team-level aggregated data (stored in the team_metrics table and related tables), you need to decide on an appropriate frequency and implement efficient methods for updating the data. Here’s how you can approach it:
+
+1. Frequency of Data Refresh
+
+Factors to Consider for Frequency
+	•	Dashboard Usage: If the dashboard is accessed frequently and needs near real-time updates, refresh more frequently (e.g., every hour or every few minutes).
+	•	Data Volume: Large datasets or APIs with rate limits might restrict how often you can fetch and process data.
+	•	Performance Needs: Balance between data freshness and system load.
+
+Recommended Frequencies
+	1.	Hourly:
+	•	Suitable for dashboards where near-real-time data isn’t critical but needs periodic updates.
+	•	Example: Update team metrics, open pull requests, and large commits every hour.
+	2.	Daily:
+	•	Useful for teams that need only end-of-day summaries.
+	•	Example: Run the aggregation job at midnight.
+	3.	Custom Intervals:
+	•	For real-time dashboards, refresh every 5–15 minutes (if data size and API usage allow it).
+
+Example Decision:
+	•	Use hourly refreshes for now, and adjust based on dashboard performance and usage patterns.
+
+2. Methods for Refreshing Data
+
+You can implement scheduled or event-driven approaches to refresh the stored team-level data. Here are the methods:
+
+Method 1: Scheduled Job Using a Cron Job (Recommended)
+
+Schedule a job to aggregate and update data periodically.
+
+Using Spring Boot Scheduler (Java Example):
+
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+
+@Service
+public class DataAggregationService {
+
+    @Scheduled(cron = "0 0 * * * ?") // Runs at the top of every hour
+    public void refreshTeamLevelData() {
+        List<FeatureTeam> teams = featureTeamRepository.findAll();
+
+        for (FeatureTeam team : teams) {
+            // Refresh team-level metrics
+            TeamMetrics metrics = aggregateTeamMetrics(team);
+            teamMetricsService.updateTeamMetrics(team, metrics);
+
+            // Refresh open pull requests
+            List<OpenPullRequest> openPullRequests = aggregateOpenPullRequests(team);
+            openPullRequestService.saveOrUpdateAll(openPullRequests);
+
+            // Refresh large commits
+            List<LargeCommit> largeCommits = aggregateLargeCommits(team);
+            largeCommitService.saveOrUpdateAll(largeCommits);
+        }
+        System.out.println("Team-level data refreshed at: " + LocalDateTime.now());
+    }
+}
+
+Method 2: Event-Driven Updates
+
+Trigger updates when certain events occur, such as:
+	1.	New Commit or Pull Request: Refresh the metrics for the affected team.
+	2.	Repository Changes: Detect changes (e.g., webhooks) and update the affected team data.
+
+Example Workflow:
+	1.	Listen to repository events via webhooks (e.g., GitHub or GitLab).
+	2.	On receiving an event:
+	•	Identify the affected team.
+	•	Recompute team metrics, open pull requests, or large commits.
+
+Method 3: Hybrid Approach
+	•	Use a scheduled job for periodic full refresh (e.g., hourly).
+	•	Use event-driven updates for incremental changes when events occur.
+
+Example Strategy:
+	•	Full refresh: Hourly using a scheduled job.
+	•	Incremental updates: Triggered by commits, merges, or new pull requests using repository webhooks.
+
+3. Efficient Refresh Techniques
+
+Incremental Refresh
+	•	Identify and update only the changes since the last refresh to reduce load.
+	•	Track timestamps for updates (e.g., last_updated column in the database).
+
+Example:
+	•	Fetch only pull requests and commits created or updated after the last_updated timestamp.
+
+public List<PullRequest> fetchUpdatedPullRequests(LocalDateTime lastUpdated) {
+    return pullRequestAPI.getPullRequests()
+        .stream()
+        .filter(pr -> pr.getUpdatedDate().isAfter(lastUpdated))
+        .collect(Collectors.toList());
+}
+
+Batch Updates
+
+Instead of updating records one at a time, use batch inserts or updates for performance.
+
+Example (Using JPA or Hibernate for Batch Operations):
+
+@Transactional
+public void saveOrUpdateAll(List<OpenPullRequest> openPullRequests) {
+    entityManager.unwrap(Session.class)
+        .setJdbcBatchSize(50); // Set batch size
+    for (int i = 0; i < openPullRequests.size(); i++) {
+        entityManager.merge(openPullRequests.get(i));
+        if (i % 50 == 0) { // Flush and clear batch
+            entityManager.flush();
+            entityManager.clear();
+        }
+    }
+}
+
+4. Monitoring and Logging
+	•	Log the start and end time of each refresh job.
+	•	Track errors during the refresh process to identify issues quickly.
+	•	Use metrics and monitoring tools to ensure the refresh process is running efficiently.
+
+Example Logging:
+
+log.info("Team-level data refresh started at: {}", LocalDateTime.now());
+// Perform data refresh
+log.info("Team-level data refresh completed at: {}", LocalDateTime.now());
+
+5. Database Cleanup
+
+To prevent the database from growing indefinitely:
+	•	Add a retention policy to remove stale data (e.g., open pull requests that were closed).
+	•	Archive old records periodically.
+
+Summary: Best Practices for Refreshing Team-Level Data
+	1.	Frequency:
+	•	Hourly refresh using scheduled jobs for team metrics, open pull requests, and large commits.
+	•	Optionally, real-time incremental updates for important events (e.g., via webhooks).
+	2.	Methods:
+	•	Use scheduled cron jobs for periodic full refresh.
+	•	Implement event-driven updates for real-time accuracy.
+	3.	Efficiency:
+	•	Use incremental updates where possible.
+	•	Optimize database writes with batch updates.
+	4.	Monitoring:
+	•	Log job execution details and errors.
+	•	Monitor performance and adjust frequency as needed.
+
+Would you like help setting up event-driven updates or optimizing batch processes further? Let me know!
