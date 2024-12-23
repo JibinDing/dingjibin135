@@ -1,0 +1,219 @@
+To connect each of your previously created tables (team_metrics, open_pull_request, and large_commit) to the SourceControl table instead of directly linking them to the FeatureTeam or Team table, you’ll need to modify the relationships in your entity classes. Here’s how you can update your design and implement the changes:
+
+1. Update Database Schema
+
+Modify the foreign key relationships in your database schema so that team_metrics, open_pull_request, and large_commit reference the SourceControl table instead of the FeatureTeam or Team table.
+
+Example Updated Table Schema:
+	•	team_metrics:
+
+CREATE TABLE team_metrics (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    source_control_id INT NOT NULL, -- New foreign key to SourceControl
+    gitlab_number INT DEFAULT 0,
+    bitbucket_number INT DEFAULT 0,
+    open_prs INT DEFAULT 0,
+    total_closed_prs INT DEFAULT 0,
+    total_merged_prs INT DEFAULT 0,
+    last_30_days_closed_prs INT DEFAULT 0,
+    last_30_days_merged_prs INT DEFAULT 0,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_control_id) REFERENCES source_control(id) ON DELETE CASCADE
+);
+
+
+	•	open_pull_request:
+
+CREATE TABLE open_pull_request (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    source_control_id INT NOT NULL, -- New foreign key to SourceControl
+    project_id INT NOT NULL,
+    project_name VARCHAR(255),
+    merge_request_id INT NOT NULL,
+    merge_request_title VARCHAR(255),
+    open_duration_days INT NOT NULL,
+    approvals_required INT DEFAULT 0,
+    approvals INT DEFAULT 0,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_control_id) REFERENCES source_control(id) ON DELETE CASCADE
+);
+
+
+	•	large_commit:
+
+CREATE TABLE large_commit (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    source_control_id INT NOT NULL, -- New foreign key to SourceControl
+    project_id INT NOT NULL,
+    project_name VARCHAR(255),
+    commit_hash VARCHAR(255) NOT NULL,
+    create_date TIMESTAMP NOT NULL,
+    added_lines INT DEFAULT 0,
+    deleted_lines INT DEFAULT 0,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_control_id) REFERENCES source_control(id) ON DELETE CASCADE
+);
+
+2. Update Entity Classes
+
+SourceControl.java
+
+The SourceControl class already exists. We’ll assume it has a primary key field (id) that other entities will reference.
+
+TeamMetrics.java
+
+@Entity
+public class TeamMetrics {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne
+    @JoinColumn(name = "source_control_id", nullable = false)
+    private SourceControl sourceControl;
+
+    private int gitlabNumber;
+    private int bitbucketNumber;
+    private int openPrs;
+    private int totalClosedPrs;
+    private int totalMergedPrs;
+    private int last30DaysClosedPrs;
+    private int last30DaysMergedPrs;
+
+    @UpdateTimestamp
+    private LocalDateTime lastUpdated;
+
+    // Getters and setters
+}
+
+OpenPullRequest.java
+
+@Entity
+public class OpenPullRequest {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne
+    @JoinColumn(name = "source_control_id", nullable = false)
+    private SourceControl sourceControl;
+
+    private int projectId;
+    private String projectName;
+    private int mergeRequestId;
+    private String mergeRequestTitle;
+    private int openDurationDays;
+    private int approvalsRequired;
+    private int approvals;
+
+    @UpdateTimestamp
+    private LocalDateTime lastUpdated;
+
+    // Getters and setters
+}
+
+LargeCommit.java
+
+@Entity
+public class LargeCommit {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne
+    @JoinColumn(name = "source_control_id", nullable = false)
+    private SourceControl sourceControl;
+
+    private int projectId;
+    private String projectName;
+    private String commitHash;
+    private LocalDateTime createDate;
+    private int addedLines;
+    private int deletedLines;
+
+    @UpdateTimestamp
+    private LocalDateTime lastUpdated;
+
+    // Getters and setters
+}
+
+3. Update Data Aggregation Logic
+
+Update your services to aggregate data at the SourceControl level instead of the Team level.
+
+Example: TeamMetricsService.java
+
+@Service
+public class TeamMetricsService {
+
+    @Autowired
+    private TeamMetricsRepository teamMetricsRepository;
+
+    @Autowired
+    private PullRequestRepository pullRequestRepository;
+
+    public void refreshMetricsForSourceControl(SourceControl sourceControl) {
+        int totalOpenPrs = pullRequestRepository.countOpenPRsBySourceControl(sourceControl.getId());
+        int totalClosedPrs = pullRequestRepository.countClosedPRsBySourceControl(sourceControl.getId());
+        int totalMergedPrs = pullRequestRepository.countMergedPRsBySourceControl(sourceControl.getId());
+        int last30DaysClosedPrs = pullRequestRepository.countClosedPRsInLast30DaysBySourceControl(sourceControl.getId());
+        int last30DaysMergedPrs = pullRequestRepository.countMergedPRsInLast30DaysBySourceControl(sourceControl.getId());
+
+        TeamMetrics metrics = teamMetricsRepository.findBySourceControlId(sourceControl.getId())
+                .orElse(new TeamMetrics());
+
+        metrics.setSourceControl(sourceControl);
+        metrics.setOpenPrs(totalOpenPrs);
+        metrics.setTotalClosedPrs(totalClosedPrs);
+        metrics.setTotalMergedPrs(totalMergedPrs);
+        metrics.setLast30DaysClosedPrs(last30DaysClosedPrs);
+        metrics.setLast30DaysMergedPrs(last30DaysMergedPrs);
+        metrics.setLastUpdated(LocalDateTime.now());
+
+        teamMetricsRepository.save(metrics);
+    }
+}
+
+4. Update Scheduled Job
+
+Update the scheduled job to iterate over SourceControl entities instead of Team.
+
+Example: DataAggregationService.java
+
+@Service
+public class DataAggregationService {
+
+    @Autowired
+    private SourceControlRepository sourceControlRepository;
+
+    @Autowired
+    private TeamMetricsService teamMetricsService;
+
+    @Scheduled(cron = "0 0 * * * ?")
+    public void refreshSourceControlData() {
+        List<SourceControl> allSourceControls = sourceControlRepository.findAll();
+
+        for (SourceControl sourceControl : allSourceControls) {
+            try {
+                teamMetricsService.refreshMetricsForSourceControl(sourceControl);
+                // Add logic for OpenPullRequestService and LargeCommitService if needed
+                System.out.println("Data refreshed for SourceControl: " + sourceControl.getId());
+            } catch (Exception e) {
+                System.err.println("Error refreshing data for SourceControl: " + sourceControl.getId());
+                e.printStackTrace();
+            }
+        }
+    }
+}
+
+5. Testing the Changes
+	1.	Verify database migrations for schema changes.
+	2.	Populate the SourceControl table with test data for GitLab and Bitbucket.
+	3.	Run the application and validate that:
+	•	Metrics aggregate correctly for each SourceControl.
+	•	The scheduled job updates the team_metrics, open_pull_request, and large_commit tables with the new foreign key relationship.
+
+This design ensures your system can handle multiple repositories (GitLab, Bitbucket) associated with a team while maintaining flexibility and scalability.
