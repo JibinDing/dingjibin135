@@ -1,0 +1,113 @@
+To refresh the stored data efficiently in your current schema, follow these steps:
+
+Scheduled Job for Refresh
+
+You can create a Spring Boot scheduled job to periodically refresh the stored data in your database.
+
+Steps to Implement the Refresh Logic
+	1.	Add the @Scheduled Annotation:
+	•	Create a method annotated with @Scheduled in your service class that will run periodically (e.g., every hour).
+	2.	Retrieve the Source Control Records:
+	•	Fetch all SourceControl records from the database.
+	3.	Calculate Metrics for Each Source Control:
+	•	Loop through the SourceControl records.
+	•	Use your repositories (PullRequestRepository, LargeCommitRepository, etc.) to calculate the updated metrics.
+	4.	Update Aggregated Tables:
+	•	Update the overall_statistics and other aggregated tables with the refreshed data.
+	5.	Save Updated Data:
+	•	Save the refreshed metrics back to the database using your repository layer.
+
+Example Implementation
+
+Scheduled Job in Service Class
+
+@Service
+public class DataRefreshService {
+
+    @Autowired
+    private SourceControlRepository sourceControlRepository;
+
+    @Autowired
+    private PullRequestRepository pullRequestRepository;
+
+    @Autowired
+    private LargeCommitRepository largeCommitRepository;
+
+    @Autowired
+    private OverallStatisticsRepository overallStatisticsRepository;
+
+    @Scheduled(cron = "0 0 * * * *") // Runs every hour
+    public void refreshAllSourceControlData() {
+        List<SourceControl> sourceControls = sourceControlRepository.findAll();
+
+        for (SourceControl sourceControl : sourceControls) {
+            refreshMetricsForSourceControl(sourceControl);
+        }
+    }
+
+    private void refreshMetricsForSourceControl(SourceControl sourceControl) {
+        // Aggregate data from PullRequestRepository
+        int totalOpenPrs = pullRequestRepository.countOpenPRs(sourceControl.getId());
+        int totalClosedPrs = pullRequestRepository.countClosedPRs(sourceControl.getId());
+        int totalMergedPrs = pullRequestRepository.countMergedPRs(sourceControl.getId());
+        int last30DaysClosedPrs = pullRequestRepository.countClosedPRsInLast30Days(sourceControl.getId());
+        int last30DaysMergedPrs = pullRequestRepository.countMergedPRsInLast30Days(sourceControl.getId());
+
+        // Aggregate data from LargeCommitRepository
+        int totalAddedLines = largeCommitRepository.sumAddedLines(sourceControl.getId());
+        int totalDeletedLines = largeCommitRepository.sumDeletedLines(sourceControl.getId());
+
+        // Fetch or create OverallStatistics entity
+        OverallStatistics stats = overallStatisticsRepository.findBySourceControlId(sourceControl.getId())
+                .orElse(new OverallStatistics());
+
+        // Update metrics
+        stats.setSourceControl(sourceControl);
+        stats.setOpenPrs(totalOpenPrs);
+        stats.setTotalClosedPrs(totalClosedPrs);
+        stats.setTotalMergedPrs(totalMergedPrs);
+        stats.setLast30DaysClosedPrs(last30DaysClosedPrs);
+        stats.setLast30DaysMergedPrs(last30DaysMergedPrs);
+        stats.setAddedLines(totalAddedLines);
+        stats.setDeletedLines(totalDeletedLines);
+        stats.setLastUpdated(LocalDateTime.now());
+
+        // Save updated statistics
+        overallStatisticsRepository.save(stats);
+    }
+}
+
+Explanation of the Scheduled Job
+	1.	Cron Schedule:
+	•	The job runs every hour (cron = "0 0 * * * *"). Adjust this frequency as per your requirements.
+	2.	Loop through SourceControl:
+	•	Processes each SourceControl entry one by one, ensuring every associated repository and table gets updated.
+	3.	Refresh Logic:
+	•	Uses repository queries (like countOpenPRs, sumAddedLines) to fetch the latest metrics.
+	•	Updates or creates entries in OverallStatistics.
+
+Repository Example Queries
+
+Add custom methods to your repositories to support the refresh logic:
+
+PullRequestRepository
+
+@Query("SELECT COUNT(*) FROM PullRequest pr WHERE pr.sourceControl.id = :sourceControlId AND pr.status = 'OPEN'")
+int countOpenPRs(@Param("sourceControlId") Long sourceControlId);
+
+@Query("SELECT COUNT(*) FROM PullRequest pr WHERE pr.sourceControl.id = :sourceControlId AND pr.status = 'CLOSED'")
+int countClosedPRs(@Param("sourceControlId") Long sourceControlId);
+
+// For last 30 days
+@Query("SELECT COUNT(*) FROM PullRequest pr WHERE pr.sourceControl.id = :sourceControlId AND pr.status = 'CLOSED' AND pr.lastUpdated > CURRENT_DATE - 30")
+int countClosedPRsInLast30Days(@Param("sourceControlId") Long sourceControlId);
+
+LargeCommitRepository
+
+@Query("SELECT SUM(lc.addedLines) FROM LargeCommit lc WHERE lc.sourceControl.id = :sourceControlId")
+int sumAddedLines(@Param("sourceControlId") Long sourceControlId);
+
+@Query("SELECT SUM(lc.deletedLines) FROM LargeCommit lc WHERE lc.sourceControl.id = :sourceControlId")
+int sumDeletedLines(@Param("sourceControlId") Long sourceControlId);
+
+This structure ensures that all data remains synchronized and up-to-date with minimal manual intervention.
