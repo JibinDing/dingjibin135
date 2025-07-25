@@ -1,0 +1,74 @@
+public List<IRunBookEvent> GetRunBookEvents(IRunBookResponse runBook, DateTime startTime)
+{
+    var logStreamToConnect = GetEventStreamName(runBook.InstanceName, runBook.NodeName, "RunBook");
+    var events = new List<IRunBookEvent>();
+
+    try
+    {
+        CreateClient();
+
+        var query = new StartQueryRequest()
+        {
+            LogGroupName = GetLogGroupName("runBook"),
+            QueryString = $"fields @timestamp, @message | filter @logStream like /{logStreamToConnect}/ | sort @timestamp asc",
+            StartTime = GetEpochDateTime(startTime),
+            EndTime = GetEpochDateTime(DateTime.Now),
+            Limit = 10000
+        };
+
+        var result = ExecuteCloudwatchQuery(query).Result;
+        if (result == null) return events;
+
+        foreach (var ev in result.Results)
+        {
+            var eventValue = ev[1].Value;
+
+            var runEvent = TryParseJsonEvent(eventValue, runBook);
+            if (runEvent != null)
+            {
+                events.Add(runEvent);
+                continue;
+            }
+
+            var pipelineEvents = ParsePipelineEvents(eventValue, runBook);
+            events.AddRange(pipelineEvents);
+        }
+
+        return events;
+    }
+    catch (Exception ex)
+    {
+        _logger.Error("Exception while retrieving data from AWS. Will be retried by calling class", ex);
+        throw;
+    }
+}
+
+private IRunBookEvent? TryParseJsonEvent(string eventValue, IRunBookResponse runBook)
+{
+    if (!IsRunBookEventForRunBook(eventValue, runBook))
+        return null;
+
+    try
+    {
+        return JsonConvert.DeserializeObject<RunBookEvent>(eventValue);
+    }
+    catch (Exception ex)
+    {
+        _logger.Info($"Runbook Event not parsed: {ex.Message}");
+        return null;
+    }
+}
+
+private List<IRunBookEvent> ParsePipelineEvents(string eventValue, IRunBookResponse runBook)
+{
+    var results = new List<IRunBookEvent>();
+
+    if (!IsGranularRunBookEventForRunBook(eventValue, runBook))
+        return results;
+
+    var runEvents = ParsePipelineUnitEvent(eventValue);
+    if (runEvents != null)
+        results.AddRange(runEvents);
+
+    return results;
+}
