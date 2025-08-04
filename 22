@@ -1,178 +1,35 @@
-If you want to store detailed data for individual open pull requests to display on the dashboard, follow this approach:
+public static string JsonToCSV(string jsonContent)
+{
+    StringWriter csvString = new StringWriter();
 
-Approach
+    using (var csv = new CsvWriter(csvString, CultureInfo.CurrentCulture))
+    {
+        var array = JArray.Parse(jsonContent);
 
-We will create a dedicated table for open pull requests to store the detailed information while associating it with a team. This allows you to:
-	•	Retain individual details (e.g., title, open duration, approvals).
-	•	Query or display these details in a user-friendly format.
-	•	Aggregate this data for team-level metrics when needed.
+        // Fill in column titles
+        var firstObj = array.First as JObject;
+        if (firstObj != null)
+        {
+            foreach (JProperty title in firstObj.Properties())
+            {
+                csv.WriteField(title.Name);
+            }
+            csv.NextRecord();
+        }
 
-Step 1: Database Schema
-
-open_pull_request Table
-
-This table stores detailed information about individual open pull requests for a team.
-
-CREATE TABLE open_pull_request (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,  -- Unique identifier for the record
-    project_id BIGINT NOT NULL,            -- Repository ID
-    project_name VARCHAR(255),             -- Repository name
-    merge_request_id BIGINT NOT NULL,      -- Unique ID for the pull/merge request
-    merge_request_title VARCHAR(255),      -- Title of the pull/merge request
-    open_duration_days INT NOT NULL,       -- Number of days the request has been open
-    approvals_required INT DEFAULT 0,      -- Approvals required for the pull request
-    approvals INT DEFAULT 0,               -- Current number of approvals
-    team_id BIGINT NOT NULL,               -- Foreign key to associate with a team
-    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- Last sync time
-    FOREIGN KEY (team_id) REFERENCES feature_team(id)  -- Relation to the feature_team table
-);
-
-Step 2: Entity Class
-
-Create an OpenPullRequest entity in your backend:
-
-@Entity
-@Table(name = "open_pull_request")
-public class OpenPullRequest {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
-    private Long projectId;                 // Repository ID
-    private String projectName;             // Repository name
-    private Long mergeRequestId;            // Pull/Merge request ID
-    private String mergeRequestTitle;       // Title of the pull/merge request
-    private int openDurationDays;           // Open duration (in days)
-    private int approvalsRequired;          // Required approvals
-    private int approvals;                  // Current number of approvals
-
-    @ManyToOne
-    @JoinColumn(name = "team_id", nullable = false)
-    private FeatureTeam team;               // Relation to FeatureTeam entity
-
-    private LocalDateTime lastUpdated;      // Data freshness timestamp
-
-    // Getters and setters
-}
-
-Step 3: Repository
-
-Create a repository interface for OpenPullRequest to handle CRUD operations.
-
-@Repository
-public interface OpenPullRequestRepository extends JpaRepository<OpenPullRequest, Long> {
-    List<OpenPullRequest> findByTeamId(Long teamId);
-    Optional<OpenPullRequest> findByMergeRequestId(Long mergeRequestId);
-}
-
-Step 4: Sync Service
-
-Implement a service to:
-	1.	Fetch open pull requests for repositories in a team.
-	2.	Update the open_pull_request table with the latest data.
-
-@Service
-public class OpenPullRequestSyncService {
-
-    @Autowired
-    private OpenPullRequestRepository openPullRequestRepository;
-
-    @Autowired
-    private GitLabApiService gitLabApiService;
-
-    public void syncOpenPullRequests(FeatureTeam team) {
-        // Fetch repositories for the team
-        List<Repository> repositories = gitLabApiService.getRepositoriesByTeam(team.getId());
-
-        for (Repository repo : repositories) {
-            // Fetch open pull requests for the repository
-            List<PullRequest> openPullRequests = gitLabApiService.getOpenPullRequests(repo.getId());
-
-            for (PullRequest pr : openPullRequests) {
-                // Check if the pull request already exists
-                OpenPullRequest openPullRequest = openPullRequestRepository
-                        .findByMergeRequestId(pr.getId())
-                        .orElse(new OpenPullRequest());
-
-                // Update or create new record
-                openPullRequest.setProjectId(repo.getId());
-                openPullRequest.setProjectName(repo.getName());
-                openPullRequest.setMergeRequestId(pr.getId());
-                openPullRequest.setMergeRequestTitle(pr.getTitle());
-                openPullRequest.setOpenDurationDays(pr.getOpenDurationDays());
-                openPullRequest.setApprovalsRequired(pr.getApprovalsRequired());
-                openPullRequest.setApprovals(pr.getApprovals());
-                openPullRequest.setTeam(team);
-                openPullRequest.setLastUpdated(LocalDateTime.now());
-
-                // Save to database
-                openPullRequestRepository.save(openPullRequest);
+        // Fill columns with data
+        foreach (var obj in array)
+        {
+            if (obj is JObject recordObj)
+            {
+                foreach (JProperty prop in recordObj.Properties())
+                {
+                    csv.WriteField(prop.Value?.ToString() ?? "");
+                }
+                csv.NextRecord();
             }
         }
     }
+
+    return csvString.ToString();
 }
-
-Step 5: Scheduled Job to Refresh Data
-
-Set up a scheduled job to periodically sync open pull request data for all teams.
-
-@Service
-public class MetricsRefreshJob {
-
-    @Autowired
-    private FeatureTeamRepository featureTeamRepository;
-
-    @Autowired
-    private OpenPullRequestSyncService openPullRequestSyncService;
-
-    @Scheduled(cron = "0 0 * * * ?")  // Run every hour
-    public void refreshOpenPullRequestData() {
-        // Fetch all teams
-        List<FeatureTeam> teams = featureTeamRepository.findAll();
-
-        for (FeatureTeam team : teams) {
-            // Sync open pull requests for the team
-            openPullRequestSyncService.syncOpenPullRequests(team);
-        }
-    }
-}
-
-Step 6: API Endpoints
-
-Create API endpoints to:
-	1.	Fetch detailed open pull request data for a team.
-	2.	Fetch aggregated open pull request metrics for a team.
-
-Controller Example:
-
-@RestController
-@RequestMapping("/api/teams")
-public class OpenPullRequestController {
-
-    @Autowired
-    private OpenPullRequestRepository openPullRequestRepository;
-
-    @GetMapping("/{teamId}/open-pull-requests")
-    public List<OpenPullRequest> getOpenPullRequests(@PathVariable Long teamId) {
-        return openPullRequestRepository.findByTeamId(teamId);
-    }
-}
-
-Step 7: Frontend Integration
-	1.	Fetch Data:
-	•	Use the /api/teams/{teamId}/open-pull-requests endpoint to get detailed pull request data for the team.
-	2.	Display Data:
-	•	Create a table or card layout to display details like:
-	•	Pull request title.
-	•	Repository name.
-	•	Open duration.
-	•	Approvals required vs. approvals received.
-	3.	Pagination and Filtering:
-	•	Add pagination or filters (e.g., by project name or open duration) for better usability.
-
-Benefits of Storing Detailed Open Pull Request Data
-	1.	Flexibility: Enables detailed views and queries for individual pull requests.
-	2.	Dashboard Ready: Easily display detailed information on the frontend.
-	3.	Aggregation: You can aggregate data (e.g., total open requests, average duration) when required without recalculating from scratch.
-	4.	History Tracking: Retain historical pull request data if required for audit or trend analysis.
