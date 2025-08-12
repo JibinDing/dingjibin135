@@ -1,0 +1,116 @@
+using System.Collections.Generic;
+using Microsoft.Extensions.Configuration;
+using Xunit;
+using Barclays.Alm.Ramebbo.WebApi;   // 引用生产代码中的 AllowedCorsConfiguration
+
+namespace Barclays.Alm.Ramebbo.WebApiTest
+{
+    public class AllowedCorsConfigurationBindingTests
+    {
+        [Fact]
+        public void Bind_Should_Populate_CorsURL_From_Config()
+        {
+            // Arrange: 用内存配置模拟 appsettings.json
+            var dict = new Dictionary<string, string?>
+            {
+                ["AllowedCors:CorsURL:0"] = "http://localhost:4200",
+                ["AllowedCors:CorsURL:1"] = "https://example.com:8080"
+            };
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(dict)
+                .Build();
+
+            var settings = new AllowedCorsConfiguration();
+
+            // Act
+            config.GetSection(AllowedCorsConfiguration.ConfigKey).Bind(settings);
+
+            // Assert
+            Assert.NotNull(settings.CorsURL);
+            Assert.Equal(2, settings.CorsURL.Count);
+            Assert.Equal("http://localhost:4200", settings.CorsURL[0]);
+            Assert.Equal("https://example.com:8080", settings.CorsURL[1]);
+        }
+    }
+}
+
+
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Xunit;
+
+namespace Barclays.Alm.Ramebbo.WebApiTest
+{
+    // 用你真实的 Startup
+    public class CorsMiddlewareTests :
+        IClassFixture<WebApplicationFactory<Barclays.Alm.Ramebbo.WebApi.Startup>>
+    {
+        private readonly WebApplicationFactory<Barclays.Alm.Ramebbo.WebApi.Startup> _factory;
+
+        public CorsMiddlewareTests(WebApplicationFactory<Barclays.Alm.Ramebbo.WebApi.Startup> baseFactory)
+        {
+            _factory = baseFactory.WithWebHostBuilder(builder =>
+            {
+                // 写入测试用的 AllowedCors 配置
+                builder.ConfigureAppConfiguration((ctx, cfg) =>
+                {
+                    var dict = new Dictionary<string, string?>
+                    {
+                        ["AllowedCors:CorsURL:0"] = "http://localhost:4200",
+                        ["AllowedCors:CorsURL:1"] = "https://example.com:8080",
+                    };
+                    cfg.AddInMemoryCollection(dict);
+                });
+
+                // 防止后台 IHostedService 等在测试时启动
+                builder.ConfigureServices(services =>
+                {
+                    var hosted = services
+                        .Where(d => typeof(IHostedService).IsAssignableFrom(d.ServiceType))
+                        .ToList();
+                    foreach (var d in hosted) services.Remove(d);
+                });
+            });
+        }
+
+        [Fact]
+        public async Task Preflight_With_Allowed_Origin_Should_Return_Cors_Headers()
+        {
+            var client = _factory.CreateClient();
+
+            var req = new HttpRequestMessage(HttpMethod.Options, "/any-path");
+            req.Headers.Add("Origin", "https://example.com:8080");
+            req.Headers.Add("Access-Control-Request-Method", "GET");
+
+            var res = await client.SendAsync(req);
+
+            // 预检一般是 204，无正文
+            Assert.Equal(HttpStatusCode.NoContent, res.StatusCode);
+            Assert.True(res.Headers.TryGetValues("Access-Control-Allow-Origin", out var values));
+            Assert.Equal("https://example.com:8080", values.Single());
+            Assert.True(res.Headers.Contains("Access-Control-Allow-Credentials"));
+        }
+
+        [Fact]
+        public async Task Preflight_With_Disallowed_Origin_Should_Not_Return_Cors_Headers()
+        {
+            var client = _factory.CreateClient();
+
+            var req = new HttpRequestMessage(HttpMethod.Options, "/any-path");
+            req.Headers.Add("Origin", "https://not-allowed.com");
+            req.Headers.Add("Access-Control-Request-Method", "GET");
+
+            var res = await client.SendAsync(req);
+
+            Assert.False(res.Headers.Contains("Access-Control-Allow-Origin"));
+            Assert.False(res.Headers.Contains("Access-Control-Allow-Credentials"));
+        }
+    }
+}
