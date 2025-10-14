@@ -1,0 +1,7 @@
+In 2025, one of my key objectives was to help the team effectively manage AWS server costs. To achieve this, I proactively monitored the usage of our AWS instances across multiple clusters and regularly reminded colleagues to shut down inactive servers to avoid unnecessary spending.
+
+To enhance transparency and cost awareness, I developed automated monthly cost reports that visualize spending patterns across environments. This has helped the team better understand where costs arise and identify opportunities for optimization.
+
+In addition, I implemented a backend API and integrated it with our Basecamp system to automate the retrieval of cost data from AWS. Previously, this process required manual effort, but with my solution, the cost data is now fetched and displayed in real time within Basecamp. This automation not only improved the efficiency of cost tracking but also reduced the likelihood of human error.
+
+Overall, these efforts have increased our team’s operational efficiency, improved visibility of cost drivers, and contributed to measurable cost reductions in our AWS environments.
