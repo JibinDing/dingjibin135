@@ -24,3 +24,13 @@ Throughout these projects, I consistently demonstrated Barclays’ values and mi
 	•	Collaborate: I worked closely with both DevOps and backend teams during the GitLab migration to ensure minimal disruption and effective communication across stakeholders.
 
 By embodying these principles, I not only delivered tangible technical outcomes but also helped strengthen our team’s culture of accountability, innovation, and continuous improvement.
+
+During this period, I placed strong emphasis on maintaining high standards of code quality, security, and operational control across our systems.
+
+After integrating SonarQube into our CI/CD pipeline, I reviewed all identified issues and successfully resolved every critical item. This included fixing potential security vulnerabilities, enhancing exception handling, and improving data validation logic. These actions significantly reduced the risk of production incidents and strengthened the overall resilience of our applications.
+
+In addition, I contributed to improving control processes through automation and visibility. For example, by automating AWS cost monitoring and reporting, I reduced manual errors and improved data accuracy, which supports better financial control and compliance.
+
+I also completed all mandatory Risk and Control training modules, reinforcing my understanding of Barclays’ governance standards, operational risk management, and secure coding practices. This helped me apply risk awareness more effectively in day-to-day engineering work and align with the firm’s control framework.
+
+Overall, I proactively identified, mitigated, and prevented risks through both technical improvements and continuous learning, ensuring our systems remain compliant, secure, and reliable.
