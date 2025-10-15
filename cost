@@ -1,0 +1,130 @@
+namespace Barclays.Alm.Ramebbo.WebApi.Models
+{
+    public class Ec2PriceResponse
+    {
+        public string InstanceType { get; set; } = string.Empty;
+        public string Region { get; set; } = string.Empty;
+        public decimal OnDemandPriceUSD { get; set; }
+        public string Currency { get; set; } = "USD";
+    }
+}
+
+
+
+using Amazon.Pricing;
+using Amazon.Pricing.Model;
+using Microsoft.Extensions.Caching.Memory;
+using Newtonsoft.Json;
+
+namespace Barclays.Alm.Ramebbo.WebApi.Service
+{
+    public class Ec2PricingService
+    {
+        private readonly AmazonPricingClient _client;
+        private readonly IMemoryCache _cache;
+        private readonly Dictionary<string, string> _regionMap;
+
+        public Ec2PricingService(IMemoryCache cache)
+        {
+            _client = new AmazonPricingClient(Amazon.RegionEndpoint.USEast1);
+            _cache = cache;
+
+            _regionMap = new Dictionary<string, string>
+            {
+                { "eu-west-1", "EU (Ireland)" },
+                { "us-east-1", "US East (N. Virginia)" },
+                { "us-west-2", "US West (Oregon)" },
+                { "ap-northeast-1", "Asia Pacific (Tokyo)" },
+                { "ap-southeast-1", "Asia Pacific (Singapore)" }
+            };
+        }
+
+        public async Task<decimal?> GetOnDemandPriceAsync(string instanceType, string region)
+        {
+            string cacheKey = $"{instanceType}-{region}";
+            if (_cache.TryGetValue(cacheKey, out decimal cached))
+                return cached;
+
+            string awsRegionName = _regionMap.ContainsKey(region) ? _regionMap[region] : "EU (Ireland)";
+
+            var request = new GetProductsRequest
+            {
+                ServiceCode = "AmazonEC2",
+                Filters = new List<Filter>
+                {
+                    new Filter { Type = "TERM_MATCH", Field = "instanceType", Value = instanceType },
+                    new Filter { Type = "TERM_MATCH", Field = "location", Value = awsRegionName },
+                    new Filter { Type = "TERM_MATCH", Field = "operatingSystem", Value = "Linux" },
+                    new Filter { Type = "TERM_MATCH", Field = "tenancy", Value = "Shared" },
+                    new Filter { Type = "TERM_MATCH", Field = "preInstalledSw", Value = "NA" },
+                    new Filter { Type = "TERM_MATCH", Field = "capacitystatus", Value = "Used" }
+                },
+                MaxResults = 1
+            };
+
+            var response = await _client.GetProductsAsync(request);
+            if (response.PriceList.Count == 0)
+                return null;
+
+            dynamic json = JsonConvert.DeserializeObject(response.PriceList.First());
+            string priceStr = json["terms"]["OnDemand"].First.First["priceDimensions"]
+                .First.First["pricePerUnit"]["USD"].ToString();
+
+            decimal price = decimal.Parse(priceStr);
+            _cache.Set(cacheKey, price, TimeSpan.FromHours(12));
+            return price;
+        }
+    }
+}
+
+
+
+using Microsoft.AspNetCore.Mvc;
+using Barclays.Alm.Ramebbo.WebApi.Service;
+using Barclays.Alm.Ramebbo.WebApi.Models;
+
+namespace Barclays.Alm.Ramebbo.WebApi.Controllers
+{
+    [ApiController]
+    [Route("api/ec2/pricing")]
+    public class Ec2PricingController : ControllerBase
+    {
+        private readonly Ec2PricingService _pricingService;
+
+        public Ec2PricingController(Ec2PricingService pricingService)
+        {
+            _pricingService = pricingService;
+        }
+
+        [HttpGet]
+        public async Task<ActionResult<Ec2PriceResponse>> GetPrice(
+            [FromQuery] string instanceType,
+            [FromQuery] string region)
+        {
+            if (string.IsNullOrEmpty(instanceType) || string.IsNullOrEmpty(region))
+                return BadRequest("Missing instanceType or region");
+
+            var price = await _pricingService.GetOnDemandPriceAsync(instanceType, region);
+            if (price == null)
+                return NotFound("Price not found for given instanceType/region");
+
+            return Ok(new Ec2PriceResponse
+            {
+                InstanceType = instanceType,
+                Region = region,
+                OnDemandPriceUSD = price.Value
+            });
+        }
+    }
+}
+
+
+
+
+services.AddMemoryCache();
+services.AddSingleton<Ec2PricingService>();
+
+
+
+GET http://localhost:5000/api/ec2/pricing?instanceType=t3.micro&region=eu-west-1
+
