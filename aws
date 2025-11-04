@@ -1,0 +1,23 @@
+🔍 The Core Problem
+	•	Previously, in PROD, all AWS SDK clients (EC2, S3, CloudWatch, etc.) were created without explicitly passing credentials.
+→ They relied on the EC2 instance role (Instance Profile) attached to the machine, which had full permissions — so everything worked fine.
+	•	When you added the Cost Explorer feature, you started fetching credentials from CSM (Central Secret Manager) — specifically the app-read-only role — and used them to create AWS SDK clients.
+→ As a result, every AWS client (including EC2) started using the weaker app-read-only credentials instead of the instance role.
+→ That’s why in PROD you can’t start or stop EC2 instances anymore — you’ve overwritten the permissions source.
+
+Your manager’s explanation means exactly this:
+	•	Before, awsConnectionCredential was always null, so all clients were created using parameterless constructors (lines 38, 58, 90).
+	•	That’s the behavior we want to keep for everything except Cost Explorer.
+	•	Only Cost Explorer should use credentials from CSM.
+	•	And you should only create/use these credentials in DEV; in PROD, do nothing (keep null).
+
+⸻
+
+✅ The Goal Behavior
+	1.	EC2 / S3 / CloudWatch / others
+	•	Always return a parameterless AWS client (no credentials passed).
+	•	This keeps PROD working correctly via the instance role.
+	•	Works the same in DEV and PROD.
+	2.	Cost Explorer
+	•	In DEV: use the credentials you fetched from CSM (AccessKeyId, SecretAccessKey, SessionToken).
+	•	In PROD: do not create or use those credentials (either skip or disable the feature).
