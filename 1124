@@ -1,24 +1,93 @@
-// 文件: ICostData.cs (可以重命名为 CostData.cs 更清晰)
-namespace Barclays.Alm.Ramebbo.Contracts.CostManagement
+// 文件: CostExplorerCache.cs
+
+using Microsoft.Extensions.Caching.Memory;
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Barclays.Alm.Ramebbo.Contracts.CostManagement; 
+// 确保引用您的 AWS Console Service 接口所在的命名空间
+using Barclays.Alm.Ramebbo.Infrastructure; // 假设 IAwsConsoleService 在此命名空间
+
+namespace Barclays.Alm.Ramebbo.Infrastructure.Cache
 {
-    // 这个类用于存储从 AWS 获取的每一条成本数据
-    public class CostData 
+    public class CostExplorerCache : ICostExplorerCache // ICostExplorerCache 是我们在步骤 2.2 定义的
     {
-        // 资源的唯一标识符 (例如 id)
-        public string ResourceId { get; set; } 
+        private readonly IMemoryCache _cache;
+        // 【重要修改】使用 IAwsConsoleService
+        private readonly IAwsConsoleService _awsConsoleService; 
         
-        // 资源所属的环境
-        public string AppEnvironment { get; set; } 
-        
-        // 资源的拥有者
-        public string Owner { get; set; } 
-        
-        // 总成本 (这是您最关心的字段)
-        public decimal TotalCost { get; set; } 
-        
-        // 其他重要字段 (可选，但推荐保留)
-        // 例如：
-        // public string AccountId { get; set; } 
-        // public string InstanceType { get; set; } 
+        // 构造函数：获取 IMemoryCache 和 AWS Console Service
+        public CostExplorerCache(IMemoryCache cache, IAwsConsoleService awsConsoleService)
+        {
+            _cache = cache;
+            _awsConsoleService = awsConsoleService; // 注入正确的 AWS 客户端
+        }
+
+        // 定义三种数据的缓存键
+        private const string MonthlyKey = "MonthlyCostDataKey";
+        private const string DailyKey = "DailyCostDataKey";
+        private const string HourlyKey = "HourlyCostDataKey";
+
+        // ------------------ 月度成本（缓存 24 小时） ------------------
+        public async Task<List<CostData>> GetMonthlyCostDataAsync()
+        {
+            var cacheDuration = TimeSpan.FromHours(24); 
+
+            return await _cache.GetOrCreateAsync(
+                MonthlyKey, 
+                async entry =>
+                {
+                    entry.AbsoluteExpirationRelativeToNow = cacheDuration;
+                    Console.WriteLine("--- 缓存未命中：正在调用 AWS API 获取月度成本 (MONTHLY) ---");
+                    
+                    // 【调用正确的 AWS 方法】
+                    // 我们假设 GetCostAndUsageWithResourcesAsync 的第二个参数是粒度 (Granularity)
+                    var result = await _awsConsoleService.GetCostAndUsageWithResourcesAsync(
+                        request: new CostExplorerRequest { Granularity = "MONTHLY" }, // 使用 CostExplorerRequest
+                        granularity: "MONTHLY"); 
+                    
+                    // 假设返回的结果需要转换成 List<CostData>，
+                    // 如果它已经返回 List<CostData>，则不需要额外的转换
+                    return result; 
+                });
+        }
+
+        // ------------------ 每日成本（缓存 6 小时） ------------------
+        public async Task<List<CostData>> GetDailyCostDataAsync()
+        {
+            var cacheDuration = TimeSpan.FromHours(6); 
+
+            return await _cache.GetOrCreateAsync(
+                DailyKey, 
+                async entry =>
+                {
+                    entry.AbsoluteExpirationRelativeToNow = cacheDuration;
+                    Console.WriteLine("--- 缓存未命中：正在调用 AWS API 获取每日成本 (DAILY) ---");
+                    
+                    // 【调用正确的 AWS 方法】
+                    return await _awsConsoleService.GetCostAndUsageWithResourcesAsync(
+                        request: new CostExplorerRequest { Granularity = "DAILY" }, 
+                        granularity: "DAILY"); 
+                });
+        }
+
+        // ------------------ 每小时成本（缓存 1 小时） ------------------
+        public async Task<List<CostData>> GetHourlyCostDataAsync()
+        {
+            var cacheDuration = TimeSpan.FromHours(1); 
+
+            return await _cache.GetOrCreateAsync(
+                HourlyKey, 
+                async entry =>
+                {
+                    entry.AbsoluteExpirationRelativeToNow = cacheDuration;
+                    Console.WriteLine("--- 缓存未命中：正在调用 AWS API 获取每小时成本 (HOURLY) ---");
+                    
+                    // 【调用正确的 AWS 方法】
+                    return await _awsConsoleService.GetCostAndUsageWithResourcesAsync(
+                        request: new CostExplorerRequest { Granularity = "HOURLY" }, 
+                        granularity: "HOURLY"); 
+                });
+        }
     }
 }
