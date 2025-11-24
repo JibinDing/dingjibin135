@@ -1,0 +1,24 @@
+// 文件: ICostData.cs (可以重命名为 CostData.cs 更清晰)
+namespace Barclays.Alm.Ramebbo.Contracts.CostManagement
+{
+    // 这个类用于存储从 AWS 获取的每一条成本数据
+    public class CostData 
+    {
+        // 资源的唯一标识符 (例如 id)
+        public string ResourceId { get; set; } 
+        
+        // 资源所属的环境
+        public string AppEnvironment { get; set; } 
+        
+        // 资源的拥有者
+        public string Owner { get; set; } 
+        
+        // 总成本 (这是您最关心的字段)
+        public decimal TotalCost { get; set; } 
+        
+        // 其他重要字段 (可选，但推荐保留)
+        // 例如：
+        // public string AccountId { get; set; } 
+        // public string InstanceType { get; set; } 
+    }
+}
