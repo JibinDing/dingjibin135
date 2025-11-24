@@ -91,3 +91,28 @@ namespace Barclays.Alm.Ramebbo.Infrastructure.Cache
         }
     }
 }
+
+
+
+// 文件: ICostExplorerCache.cs
+
+using System.Collections.Generic;
+using System.Threading.Tasks;
+// 确保引用您的 CostData 模型所在的命名空间
+using Barclays.Alm.Ramebbo.Contracts.CostManagement; 
+
+namespace Barclays.Alm.Ramebbo.Infrastructure.Cache
+{
+    public interface ICostExplorerCache
+    {
+        // 1. 获取月度成本数据
+        Task<List<CostData>> GetMonthlyCostDataAsync();
+
+        // 2. 获取每日成本数据
+        Task<List<CostData>> GetDailyCostDataAsync();
+        
+        // 3. 获取每小时成本数据
+        Task<List<CostData>> GetHourlyCostDataAsync();
+    }
+}
+
