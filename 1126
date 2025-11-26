@@ -1,0 +1,40 @@
+public class TestableControlCheckManagerService : ControlCheckManagerService
+{
+    public TestableControlCheckManagerService(ILogger logger)
+        : base(logger)
+    {
+    }
+
+    // 强行覆盖父类 DeleteAllFiles，让它返回 false
+    protected override bool DeleteAllFiles(string[] paths)
+    {
+        return false;   // 这样永远会往下执行 Online 分支
+    }
+}
+
+
+[Test]
+public void DeleteControlCheckFile_WhenStatusOnline_ShouldArchiveAndUpdate()
+{
+    // arrange
+    var loggerMock = new Mock<ILogger>();
+
+    var service = new TestableControlCheckManagerService(loggerMock.Object);
+
+    var summary = new ControlCheckSummary
+    {
+        ControlCheckId = "CHK123",
+        ControlStatus = CubeStatus.Online
+    };
+
+    var returnList = new List<ControlCheckResultStatus>();
+    var userName = "testUser";
+
+    // act
+    service.DeleteControlCheckFile(summary, returnList, userName);
+
+    // assert
+    Assert.AreEqual(CubeStatus.Archived, summary.ControlStatus);
+    Assert.AreEqual(userName, summary.UpdatedBy);
+    Assert.AreNotEqual(default(DateTime), summary.UpdatedDate);
+}
