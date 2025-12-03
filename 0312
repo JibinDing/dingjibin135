@@ -1,0 +1,98 @@
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Barclays.Alm.Ramebbo.Contracts.CostManagement;
+using Barclays.Alm.Ramebbo.Contracts.Services;
+
+namespace Barclays.Alm.Ramebbo.Infrastructure.Cache
+{
+    public class CostExplorerCache : ICostExplorerCache
+    {
+        private readonly IAwsConsoleService _awsConsoleService;
+
+        // 内存字典：key → 缓存对象
+        private readonly Dictionary<string, CachedCostEntry> _cache =
+            new Dictionary<string, CachedCostEntry>();
+
+        private readonly TimeSpan MonthlyDuration = TimeSpan.FromHours(24);
+        private readonly TimeSpan DailyDuration = TimeSpan.FromHours(6);
+        private readonly TimeSpan HourlyDuration = TimeSpan.FromHours(1);
+
+        public CostExplorerCache(IAwsConsoleService awsConsoleService)
+        {
+            _awsConsoleService = awsConsoleService;
+        }
+
+        // ------------ PRIVATE CLASS ------------
+        private class CachedCostEntry
+        {
+            public List<CostData> Data { get; set; }
+            public DateTime CachedAt { get; set; }
+        }
+
+        // ------------ PUBLIC METHODS ------------
+
+        public async Task<List<CostData>> GetMonthlyCostDataAsync()
+        {
+            return await GetOrFetchAsync(
+                key: "MonthlyCostDataKey",
+                duration: MonthlyDuration,
+                granularity: "MONTHLY"
+            );
+        }
+
+        public async Task<List<CostData>> GetDailyCostDataAsync()
+        {
+            return await GetOrFetchAsync(
+                key: "DailyCostDataKey",
+                duration: DailyDuration,
+                granularity: "DAILY"
+            );
+        }
+
+        public async Task<List<CostData>> GetHourlyCostDataAsync()
+        {
+            return await GetOrFetchAsync(
+                key: "HourlyCostDataKey",
+                duration: HourlyDuration,
+                granularity: "HOURLY"
+            );
+        }
+
+        // ------------ CORE CACHE LOGIC ------------
+
+        private async Task<List<CostData>> GetOrFetchAsync(
+            string key,
+            TimeSpan duration,
+            string granularity)
+        {
+            if (_cache.TryGetValue(key, out var entry))
+            {
+                var age = DateTime.UtcNow - entry.CachedAt;
+
+                if (age < duration)
+                {
+                    // hit
+                    Console.WriteLine($"---- Cache HIT ({granularity}) ----");
+                    return entry.Data;
+                }
+            }
+
+            // miss → 调 API
+            Console.WriteLine($"---- Cache MISS ({granularity}) → calling AWS ----");
+
+            var request = new CostExplorerRequest { Granularity = granularity };
+
+            var fresh = await _awsConsoleService.GetCostAndUsageWithResourcesAsync(request);
+
+            // 写入缓存
+            _cache[key] = new CachedCostEntry
+            {
+                CachedAt = DateTime.UtcNow,
+                Data = fresh
+            };
+
+            return fresh;
+        }
+    }
+}
