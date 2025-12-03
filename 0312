@@ -3,96 +3,152 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Barclays.Alm.Ramebbo.Contracts.CostManagement;
 using Barclays.Alm.Ramebbo.Contracts.Services;
+using Barclays.Alm.Ramebbo.Contracts.Logging; // 如果你们的 logging 命名空间不同，自己改一下
 
 namespace Barclays.Alm.Ramebbo.Infrastructure.Cache
 {
+    /// <summary>
+    /// Caches cost data in memory to reduce calls to AWS Cost Explorer
+    /// and avoid unnecessary latency / charges.
+    /// </summary>
     public class CostExplorerCache : ICostExplorerCache
     {
         private readonly IAwsConsoleService _awsConsoleService;
+        private readonly ILoggingManager _logger;
 
-        // 内存字典：key → 缓存对象
+        // 简单内存缓存：key = "MONTHLY"/"DAILY"/"HOURLY"
         private readonly Dictionary<string, CachedCostEntry> _cache =
             new Dictionary<string, CachedCostEntry>();
 
-        private readonly TimeSpan MonthlyDuration = TimeSpan.FromHours(24);
-        private readonly TimeSpan DailyDuration = TimeSpan.FromHours(6);
-        private readonly TimeSpan HourlyDuration = TimeSpan.FromHours(1);
+        // 目前先写死，后面可以很容易改成从配置读取
+        private static readonly TimeSpan MonthlyCacheDuration = TimeSpan.FromHours(24); // 1 天
+        private static readonly TimeSpan DailyCacheDuration   = TimeSpan.FromHours(6);  // 6 小时
+        private static readonly TimeSpan HourlyCacheDuration  = TimeSpan.FromHours(1);  // 1 小时
 
-        public CostExplorerCache(IAwsConsoleService awsConsoleService)
-        {
-            _awsConsoleService = awsConsoleService;
-        }
-
-        // ------------ PRIVATE CLASS ------------
+        // 内部缓存对象
         private class CachedCostEntry
         {
             public List<CostData> Data { get; set; }
-            public DateTime CachedAt { get; set; }
+            public DateTime CachedAtUtc { get; set; }
         }
 
-        // ------------ PUBLIC METHODS ------------
-
-        public async Task<List<CostData>> GetMonthlyCostDataAsync()
+        public CostExplorerCache(IAwsConsoleService awsConsoleService, ILoggingManager logger)
         {
-            return await GetOrFetchAsync(
-                key: "MonthlyCostDataKey",
-                duration: MonthlyDuration,
-                granularity: "MONTHLY"
-            );
+            _awsConsoleService = awsConsoleService ?? throw new ArgumentNullException(nameof(awsConsoleService));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public async Task<List<CostData>> GetDailyCostDataAsync()
+        // ======================= Public API =======================
+
+        public Task<List<CostData>> GetMonthlyCostDataAsync()
         {
-            return await GetOrFetchAsync(
-                key: "DailyCostDataKey",
-                duration: DailyDuration,
-                granularity: "DAILY"
-            );
+            return GetOrCreateAsync(
+                cacheKey: "MONTHLY",
+                duration: MonthlyCacheDuration,
+                valueFactory: FetchMonthlyCostDataFromAwsAsync);
         }
 
-        public async Task<List<CostData>> GetHourlyCostDataAsync()
+        public Task<List<CostData>> GetDailyCostDataAsync()
         {
-            return await GetOrFetchAsync(
-                key: "HourlyCostDataKey",
-                duration: HourlyDuration,
-                granularity: "HOURLY"
-            );
+            return GetOrCreateAsync(
+                cacheKey: "DAILY",
+                duration: DailyCacheDuration,
+                valueFactory: FetchDailyCostDataFromAwsAsync);
         }
 
-        // ------------ CORE CACHE LOGIC ------------
+        public Task<List<CostData>> GetHourlyCostDataAsync()
+        {
+            return GetOrCreateAsync(
+                cacheKey: "HOURLY",
+                duration: HourlyCacheDuration,
+                valueFactory: FetchHourlyCostDataFromAwsAsync);
+        }
 
-        private async Task<List<CostData>> GetOrFetchAsync(
-            string key,
+        // ======================= Core cache logic =======================
+
+        private async Task<List<CostData>> GetOrCreateAsync(
+            string cacheKey,
             TimeSpan duration,
-            string granularity)
+            Func<Task<List<CostData>>> valueFactory)
         {
-            if (_cache.TryGetValue(key, out var entry))
+            if (_cache.TryGetValue(cacheKey, out var entry))
             {
-                var age = DateTime.UtcNow - entry.CachedAt;
-
-                if (age < duration)
+                if (!IsExpired(entry, duration))
                 {
-                    // hit
-                    Console.WriteLine($"---- Cache HIT ({granularity}) ----");
+                    _logger.Info($"Cost cache HIT for key '{cacheKey}'.");
                     return entry.Data;
                 }
+
+                _logger.Info($"Cost cache EXPIRED for key '{cacheKey}'. Refreshing...");
+            }
+            else
+            {
+                _logger.Info($"Cost cache MISS for key '{cacheKey}'. Fetching from AWS...");
             }
 
-            // miss → 调 API
-            Console.WriteLine($"---- Cache MISS ({granularity}) → calling AWS ----");
+            var freshData = await valueFactory().ConfigureAwait(false);
 
-            var request = new CostExplorerRequest { Granularity = granularity };
-
-            var fresh = await _awsConsoleService.GetCostAndUsageWithResourcesAsync(request);
-
-            // 写入缓存
-            _cache[key] = new CachedCostEntry
+            _cache[cacheKey] = new CachedCostEntry
             {
-                CachedAt = DateTime.UtcNow,
-                Data = fresh
+                Data = freshData,
+                CachedAtUtc = DateTime.UtcNow
             };
 
-            return fresh;
+            return freshData;
         }
+
+        private static bool IsExpired(CachedCostEntry entry, TimeSpan duration)
+        {
+            var age = DateTime.UtcNow - entry.CachedAtUtc;
+            return age >= duration;
+        }
+
+        // ======================= Data fetchers =======================
+
+        // 这三个方法里**只负责调用你原来已经写好的、成熟的 cost retrieval 代码**，
+        // 其它逻辑都交给上面的缓存框架来处理。
+
+        private async Task<List<CostData>> FetchMonthlyCostDataFromAwsAsync()
+        {
+            // TODO: 把你现有取 “Monthly” cost 的逻辑粘进来
+            // 下面只是一个示例；你需要改成你项目里真实的实现：
+
+            // 例子 1：如果你已经有一个能直接返回 List<CostData> 的方法：
+            // return await _awsConsoleService.GetCostAndUsageWithResourcesAsync("MONTHLY");
+
+            // 例子 2：如果你目前是通过 GetEc2InstancesWithCostAsync 拿 IEc2，再手动映射到 CostData：
+            // var ec2WithCost = await _awsConsoleService.GetEc2InstancesWithCostAsync("MONTHLY");
+            // return MapEc2ToCostData(ec2WithCost);
+
+            throw new NotImplementedException("请在这里调用你现有的 MONTHLY cost retrieval 代码。");
+        }
+
+        private async Task<List<CostData>> FetchDailyCostDataFromAwsAsync()
+        {
+            // 同上，把 DAILY 的逻辑接进来
+            throw new NotImplementedException("请在这里调用你现有的 DAILY cost retrieval 代码。");
+        }
+
+        private async Task<List<CostData>> FetchHourlyCostDataFromAwsAsync()
+        {
+            // 同上，把 HOURLY 的逻辑接进来
+            throw new NotImplementedException("请在这里调用你现有的 HOURLY cost retrieval 代码。");
+        }
+
+        // 如果你需要从 IEc2 映射到 CostData，可以自己加一个辅助方法：
+        //
+        // private List<CostData> MapEc2ToCostData(IList<IEc2> ec2Instances)
+        // {
+        //     var result = new List<CostData>();
+        //     foreach (var ec2 in ec2Instances)
+        //     {
+        //         var item = new CostData
+        //         {
+        //             // TODO: 根据你们的 IEc2 定义，把字段一个个映射过来
+        //         };
+        //         result.Add(item);
+        //     }
+        //     return result;
+        // }
     }
 }
