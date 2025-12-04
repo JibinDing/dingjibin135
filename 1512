@@ -1,29 +1,186 @@
-public enum CostGranularity
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Barclays.Alm.Ramebbo.Contracts.CostManagement;
+using Barclays.Alm.Ramebbo.Contracts.Services;
+using Barclays.Alm.Ramebbo.Contracts.Domain;
+// 如果实际 logging 命名空间不同，请改成正确的
+using Barclays.Alm.Ramebbo.Contracts.Logging;
+
+namespace Barclays.Alm.Ramebbo.Infrastructure.Cache
 {
-    DAILY,
-    MONTHLY,
-    HOURLY
-}
+    /// <summary>
+    /// Caches cost data in memory to reduce calls to AWS Cost Explorer
+    /// and avoid unnecessary latency / charges.
+    /// </summary>
+    public class CostExplorerCache : ICostExplorerCache
+    {
+        private readonly IAwsConsoleService _awsConsoleService;
+        private readonly ILoggingManager _logger;
 
-public class CostData
-{
-    public string Id { get; set; }              // 可以用 InstanceId+时间片 拼接，或者不用也行
-    public string InstanceId { get; set; }
-    public string NodeName { get; set; }
-    public string Name { get; set; }
-    public string AmazonInstanceType { get; set; }
+        // 内存缓存：key = "MONTHLY" / "DAILY" / "HOURLY"
+        private readonly Dictionary<string, CachedCostEntry> _cache =
+            new Dictionary<string, CachedCostEntry>();
 
-    public string Environment { get; set; }     // 对应 Ec2.Environment
-    public string SandBox { get; set; }         // 对应你们的 Sandbox Tag（如果有）
-    public string Account { get; set; }         // 如果你之前也有的话也可以加上
+        // 先写死缓存时长，后面可以接 IApplicationEnvironment 改为配置
+        private static readonly TimeSpan MonthlyCacheDuration = TimeSpan.FromHours(24); // 1 天
+        private static readonly TimeSpan DailyCacheDuration   = TimeSpan.FromHours(6);  // 6 小时
+        private static readonly TimeSpan HourlyCacheDuration  = TimeSpan.FromHours(1);  // 1 小时
 
-    public CostGranularity Granularity { get; set; }
-    public decimal Cost { get; set; }
+        private class CachedCostEntry
+        {
+            public List<CostData> Data { get; set; }
+            public DateTime CachedAtUtc { get; set; }
+        }
 
-    public DateTime StartDate { get; set; }
-    public DateTime EndDate { get; set; }
+        public CostExplorerCache(
+            IAwsConsoleService awsConsoleService,
+            ILoggingManager logger)
+        {
+            _awsConsoleService = awsConsoleService ?? throw new ArgumentNullException(nameof(awsConsoleService));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        }
 
-    // 缓存元信息
-    public DateTime CachedAt { get; set; }
-    public DateTime ExpiresAt { get; set; }
+        // ======================= Public API =======================
+
+        public Task<List<CostData>> GetMonthlyCostDataAsync()
+        {
+            return GetOrCreateAsync(
+                cacheKey: "MONTHLY",
+                duration: MonthlyCacheDuration,
+                granularity: "MONTHLY");
+        }
+
+        public Task<List<CostData>> GetDailyCostDataAsync()
+        {
+            return GetOrCreateAsync(
+                cacheKey: "DAILY",
+                duration: DailyCacheDuration,
+                granularity: "DAILY");
+        }
+
+        public Task<List<CostData>> GetHourlyCostDataAsync()
+        {
+            return GetOrCreateAsync(
+                cacheKey: "HOURLY",
+                duration: HourlyCacheDuration,
+                granularity: "HOURLY");
+        }
+
+        // ======================= Core cache logic =======================
+
+        private async Task<List<CostData>> GetOrCreateAsync(
+            string cacheKey,
+            TimeSpan duration,
+            string granularity)
+        {
+            if (_cache.TryGetValue(cacheKey, out var entry))
+            {
+                if (!IsExpired(entry, duration))
+                {
+                    _logger.Info($"Cost cache HIT for key '{cacheKey}'.");
+                    return entry.Data;
+                }
+
+                _logger.Info($"Cost cache EXPIRED for key '{cacheKey}'. Refreshing...");
+            }
+            else
+            {
+                _logger.Info($"Cost cache MISS for key '{cacheKey}'. Fetching from AWS...");
+            }
+
+            // 这里调用你们已经成熟的取 cost 方法
+            var ec2Instances = await _awsConsoleService
+                .GetEc2InstancesWithCostAsync(granularity)
+                .ConfigureAwait(false);
+
+            var costDataList = MapEc2ListToCostData(ec2Instances, granularity);
+
+            _cache[cacheKey] = new CachedCostEntry
+            {
+                Data = costDataList,
+                CachedAtUtc = DateTime.UtcNow
+            };
+
+            return costDataList;
+        }
+
+        private static bool IsExpired(CachedCostEntry entry, TimeSpan duration)
+        {
+            var age = DateTime.UtcNow - entry.CachedAtUtc;
+            return age >= duration;
+        }
+
+        // ======================= Mapping =======================
+
+        /// <summary>
+        /// 将 IList&lt;IEc2&gt; 展开为前端 Raw Cost Data 需要的 List&lt;CostData&gt;。
+        /// 每个 Ec2 里的每一条 IEc2CostData，都映射成一行 CostData。
+        /// </summary>
+        private List<CostData> MapEc2ListToCostData(
+            IList<IEc2> ec2Instances,
+            string granularity)
+        {
+            var result = new List<CostData>();
+
+            if (ec2Instances == null)
+            {
+                return result;
+            }
+
+            foreach (var ec2 in ec2Instances)
+            {
+                if (ec2 == null || ec2.CostData == null)
+                {
+                    continue;
+                }
+
+                var gran = ParseGranularity(granularity);
+
+                foreach (var costItem in ec2.CostData)
+                {
+                    // 这里假设 IEc2CostData 有 StartDate / EndDate / Cost
+                    // 如果你们的属性名不一样（比如 From / To / Amount），在这里改一下就行
+                    var costData = new CostData
+                    {
+                        // 标识类
+                        InstanceId          = ec2.Id,
+                        NodeName            = ec2.NodeName,
+                        Name                = ec2.Name,
+                        AmazonInstanceType  = ec2.CurrentState,   // 如果有专门的 InstanceType 字段就改成那个
+                        Environment         = ec2.Environment,
+                        SandBox             = ec2.AppEnvironment, // 如果有单独 Sandbox 字段，用真正的 Sandbox
+                        Account             = ec2.Account,
+                        // 其他有用的 tag 需要的话也可以加到 CostData.cs 里
+
+                        // 成本相关
+                        Granularity         = gran,
+                        Cost                = (decimal)costItem.Cost,
+
+                        StartDate           = costItem.StartDate,
+                        EndDate             = costItem.EndDate,
+
+                        // 缓存元数据由 Cache 控制，这里先赋 CachedAt，ExpiresAt 可以由外层决定是否使用
+                        CachedAt            = DateTime.UtcNow,
+                        ExpiresAt           = DateTime.MinValue
+                    };
+
+                    result.Add(costData);
+                }
+            }
+
+            return result;
+        }
+
+        private CostGranularity ParseGranularity(string granularity)
+        {
+            return granularity switch
+            {
+                "MONTHLY" => CostGranularity.MONTHLY,
+                "DAILY"   => CostGranularity.DAILY,
+                "HOURLY"  => CostGranularity.HOURLY,
+                _         => CostGranularity.DAILY
+            };
+        }
+    }
 }
