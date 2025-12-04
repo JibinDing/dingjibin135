@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using Barclays.Alm.Ramebbo.Contracts.CostManagement;
 using Barclays.Alm.Ramebbo.Contracts.Services;
 using Barclays.Alm.Ramebbo.Contracts.Domain;
-// 如果实际 logging 命名空间不同，请改成正确的
+// Logging 的命名空间你自己对一下，如果不叫这个就改掉
 using Barclays.Alm.Ramebbo.Contracts.Logging;
 
 namespace Barclays.Alm.Ramebbo.Infrastructure.Cache
@@ -22,7 +22,7 @@ namespace Barclays.Alm.Ramebbo.Infrastructure.Cache
         private readonly Dictionary<string, CachedCostEntry> _cache =
             new Dictionary<string, CachedCostEntry>();
 
-        // 先写死缓存时长，后面可以接 IApplicationEnvironment 改为配置
+        // 先写死缓存时长，后面你可以改成从配置读取
         private static readonly TimeSpan MonthlyCacheDuration = TimeSpan.FromHours(24); // 1 天
         private static readonly TimeSpan DailyCacheDuration   = TimeSpan.FromHours(6);  // 6 小时
         private static readonly TimeSpan HourlyCacheDuration  = TimeSpan.FromHours(1);  // 1 小时
@@ -115,7 +115,7 @@ namespace Barclays.Alm.Ramebbo.Infrastructure.Cache
 
         /// <summary>
         /// 将 IList&lt;IEc2&gt; 展开为前端 Raw Cost Data 需要的 List&lt;CostData&gt;。
-        /// 每个 Ec2 里的每一条 IEc2CostData，都映射成一行 CostData。
+        /// 每个 Ec2 中的每一条 IEc2CostData，都映射成一行 CostData。
         /// </summary>
         private List<CostData> MapEc2ListToCostData(
             IList<IEc2> ec2Instances,
@@ -128,6 +128,8 @@ namespace Barclays.Alm.Ramebbo.Infrastructure.Cache
                 return result;
             }
 
+            var gran = ParseGranularity(granularity);
+
             foreach (var ec2 in ec2Instances)
             {
                 if (ec2 == null || ec2.CostData == null)
@@ -135,35 +137,44 @@ namespace Barclays.Alm.Ramebbo.Infrastructure.Cache
                     continue;
                 }
 
-                var gran = ParseGranularity(granularity);
-
                 foreach (var costItem in ec2.CostData)
                 {
-                    // 这里假设 IEc2CostData 有 StartDate / EndDate / Cost
-                    // 如果你们的属性名不一样（比如 From / To / Amount），在这里改一下就行
+                    // 这里假设 IEc2CostData 里有：
+                    //  - double Cost
+                    //  - DateTime StartDate
+                    //  - DateTime EndDate
+                    //
+                    // 控制台里你看到的是：
+                    //  { cost: 0.8174, ec2InstanceId: 'i-xxx', startDate: '00:00', endDate: '01:00', nodeName: 'uat3.account_gateway', ... }
+                    // 所以 C# 侧一定有对应属性，只是名字可能略有不同：
+                    // 如果叫 From / To / Amount 之类，你就在下面改一下。
+
                     var costData = new CostData
                     {
-                        // 标识类
-                        InstanceId          = ec2.Id,
-                        NodeName            = ec2.NodeName,
-                        Name                = ec2.Name,
-                        AmazonInstanceType  = ec2.CurrentState,   // 如果有专门的 InstanceType 字段就改成那个
-                        Environment         = ec2.Environment,
-                        SandBox             = ec2.AppEnvironment, // 如果有单独 Sandbox 字段，用真正的 Sandbox
-                        Account             = ec2.Account,
-                        // 其他有用的 tag 需要的话也可以加到 CostData.cs 里
+                        // 标识 / 维度信息（来自 Ec2 实例）
+                        InstanceId         = ec2.Id,
+                        NodeName           = ec2.NodeName,
+                        Name               = ec2.Name,
+                        AmazonInstanceType = ec2.AmazonInstanceType,  // 如果没有这个属性，换成正确的字段
 
-                        // 成本相关
-                        Granularity         = gran,
-                        Cost                = (decimal)costItem.Cost,
+                        Environment        = ec2.Environment,
+                        SandBox            = ec2.AppEnvironment,      // 如果将来有真正的 Sandbox 字段，再改成 Sandbox
 
-                        StartDate           = costItem.StartDate,
-                        EndDate             = costItem.EndDate,
+                        // 时间粒度
+                        Granularity        = gran,
 
-                        // 缓存元数据由 Cache 控制，这里先赋 CachedAt，ExpiresAt 可以由外层决定是否使用
-                        CachedAt            = DateTime.UtcNow,
-                        ExpiresAt           = DateTime.MinValue
+                        // 成本信息（来自 IEc2CostData）
+                        Cost               = (decimal)costItem.Cost,
+                        StartDate          = costItem.StartDate,
+                        EndDate            = costItem.EndDate,
+
+                        // 缓存元数据（方便调试用，真正过期由外层 Duration 控制）
+                        CachedAt           = DateTime.UtcNow,
+                        ExpiresAt          = DateTime.MinValue
                     };
+
+                    // 如果你想要一个唯一的 Id，可以这样拼一下：
+                    costData.Id = $"{costData.InstanceId}-{costData.StartDate:yyyyMMddHHmm}-{granularity}";
 
                     result.Add(costData);
                 }
