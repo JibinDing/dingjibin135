@@ -1,0 +1,48 @@
+private readonly ICostExplorerCache _costExplorerCache;
+
+public Ec2Controller(
+    IEngine engine,
+    ILoggingManager logger,
+    ICostExplorerCache costExplorerCache)
+{
+    _engine = engine;
+    _logger = logger;
+    _costExplorerCache = costExplorerCache;
+}
+
+[HttpGet]
+[Route("withCost/{granularity}")]
+public async Task<ActionResult<IEnumerable<CostData>>> GetEc2WithCostAsync(string granularity)
+{
+    _logger.Info($"Received request to retrieve EC2s with cost using granularity = {granularity}");
+
+    try
+    {
+        List<CostData> costList;
+
+        switch (granularity?.ToUpperInvariant())
+        {
+            case "MONTHLY":
+                costList = await _costExplorerCache.GetMonthlyCostDataAsync();
+                break;
+
+            case "DAILY":
+                costList = await _costExplorerCache.GetDailyCostDataAsync();
+                break;
+
+            case "HOURLY":
+                costList = await _costExplorerCache.GetHourlyCostDataAsync();
+                break;
+
+            default:
+                return BadRequest("Invalid granularity. Valid values are: HOURLY, DAILY, MONTHLY.");
+        }
+
+        _logger.Info("Response sent successfully (via cache)");
+        return Ok(costList);
+    }
+    catch (Exception e)
+    {
+        return HandleException(e);
+    }
+}
