@@ -1,0 +1,29 @@
+public enum CostGranularity
+{
+    DAILY,
+    MONTHLY,
+    HOURLY
+}
+
+public class CostData
+{
+    public string Id { get; set; }              // 可以用 InstanceId+时间片 拼接，或者不用也行
+    public string InstanceId { get; set; }
+    public string NodeName { get; set; }
+    public string Name { get; set; }
+    public string AmazonInstanceType { get; set; }
+
+    public string Environment { get; set; }     // 对应 Ec2.Environment
+    public string SandBox { get; set; }         // 对应你们的 Sandbox Tag（如果有）
+    public string Account { get; set; }         // 如果你之前也有的话也可以加上
+
+    public CostGranularity Granularity { get; set; }
+    public decimal Cost { get; set; }
+
+    public DateTime StartDate { get; set; }
+    public DateTime EndDate { get; set; }
+
+    // 缓存元信息
+    public DateTime CachedAt { get; set; }
+    public DateTime ExpiresAt { get; set; }
+}
