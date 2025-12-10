@@ -1,0 +1,192 @@
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Barclays.Alm.Ramebbo.Contracts.CostManagement;
+using Barclays.Alm.Ramebbo.Contracts.Domain;
+using Barclays.Alm.Ramebbo.Contracts.Services;
+using Barclays.Alm.Ramebbo.Infrastructure.Cache;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace Barclays.Alm.Ramebbo.UnitTest.Cache
+{
+    [TestClass]
+    public class CostExplorerCacheTests
+    {
+        private FakeAwsConsoleService _awsConsoleService;
+        private FakeLogger _logger;
+        private CostExplorerCache _cache;
+
+        [TestInitialize]
+        public void Setup()
+        {
+            _awsConsoleService = new FakeAwsConsoleService();
+            _logger = new FakeLogger();
+
+            // 用你真正命名空间下面的 CostExplorerCache
+            _cache = new CostExplorerCache(_awsConsoleService, _logger);
+        }
+
+        [TestMethod]
+        public async Task GetDailyCostDataAsync_FirstCall_ShouldFetchFromAws()
+        {
+            // act
+            var result = await _cache.GetDailyCostDataAsync();
+
+            // assert
+            Assert.AreEqual(1, _awsConsoleService.CallCount, "First call should hit AWS once.");
+            Assert.AreEqual("DAILY", _awsConsoleService.LastGranularity, "Granularity passed to AWS is incorrect.");
+
+            Assert.AreEqual(1, result.Count, "Should map exactly one CostData item.");
+            var item = result[0];
+            Assert.AreEqual("i-1234567890", item.InstanceId);
+            Assert.AreEqual("uat3.account_gateway", item.NodeName);
+            Assert.AreEqual(0.8174m, item.Cost);
+            Assert.AreEqual("00:00", item.StartDate);
+            Assert.AreEqual("01:00", item.EndDate);
+            Assert.AreEqual(CostGranularity.DAILY, item.Granularity);
+        }
+
+        [TestMethod]
+        public async Task GetDailyCostDataAsync_SecondCall_ShouldUseCache_AndNotCallAwsAgain()
+        {
+            // arrange: first call to populate cache
+            var first = await _cache.GetDailyCostDataAsync();
+            Assert.AreEqual(1, _awsConsoleService.CallCount);
+
+            // act: second call
+            var second = await _cache.GetDailyCostDataAsync();
+
+            // assert
+            Assert.AreEqual(1, _awsConsoleService.CallCount, "Second call should NOT call AWS again.");
+            Assert.AreEqual(first.Count, second.Count, "Cached result count should be same.");
+
+            // 可选：检查引用是否相同（表示确实拿的是缓存中的 list）
+            Assert.AreSame(first, second, "Second call should return the same List instance from cache.");
+        }
+
+        [TestMethod]
+        public async Task DifferentGranularities_ShouldUseDifferentCacheBuckets()
+        {
+            // act
+            var daily = await _cache.GetDailyCostDataAsync();
+            var monthly = await _cache.GetMonthlyCostDataAsync();
+
+            // assert: 调了两次 AWS，分别针对 DAILY / MONTHLY
+            Assert.AreEqual(2, _awsConsoleService.CallCount, "Daily + Monthly should call AWS twice.");
+            CollectionAssert.AreEquivalent(
+                new[] { "DAILY", "MONTHLY" },
+                _awsConsoleService.AllGranularities,
+                "AWS should be called once per granularity.");
+        }
+    }
+
+    // ================== Fakes ==================
+
+    /// <summary>
+    /// 伪造的 AwsConsoleService，只实现我们需要的 GetEc2InstancesWithCostAsync。
+    /// 记录调用次数和 granularity，返回固定数据，方便断言。
+    /// </summary>
+    public class FakeAwsConsoleService : IAwsConsoleService
+    {
+        public int CallCount { get; private set; }
+        public string LastGranularity { get; private set; }
+        public List<string> AllGranularities { get; } = new List<string>();
+
+        public Task<IList<IEc2>> GetEc2InstancesWithCostAsync(string granularity)
+        {
+            CallCount++;
+            LastGranularity = granularity;
+            AllGranularities.Add(granularity);
+
+            // 构造一个带 costData 的假 EC2
+            var fakeEc2 = new FakeEc2
+            {
+                Id = "i-1234567890",
+                NodeName = "uat3.account_gateway",
+                Name = "duwdsm022166458.intranet.barcapint.com",
+                AmazonInstanceType = "m7i.2xlarge",
+                Environment = "uat3.account_gateway",
+                AppEnvironment = "BLZDEV",
+                Account = "uat3"
+            };
+
+            fakeEc2.CostData.Add(new FakeEc2CostData
+            {
+                Cost = 0.8174,
+                StartDate = "00:00",
+                EndDate = "01:00"
+            });
+
+            IList<IEc2> list = new List<IEc2> { fakeEc2 };
+            return Task.FromResult(list);
+        }
+
+        // 其他 IAwsConsoleService 方法你可以用 throw 或空实现，因为这些测试用不到
+        // 比如：
+        public Task<IList<IEc2>> GetEc2InstancesAsync()
+            => throw new NotImplementedException();
+
+        // ... 其他接口方法同理，只要编译通过即可
+    }
+
+    /// <summary>
+    /// 伪造的 EC2 实例，最小实现：只提供 CostExplorerCache 会访问到的属性。
+    /// </summary>
+    public class FakeEc2 : IEc2
+    {
+        public FakeEc2()
+        {
+            CostData = new List<IEc2CostData>();
+        }
+
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public string NodeName { get; set; }
+        public string AmazonInstanceType { get; set; }
+        public string Environment { get; set; }
+        public string AppEnvironment { get; set; }
+        public string Account { get; set; }
+
+        public IList<IEc2CostData> CostData { get; }
+
+        public double TotalCost
+        {
+            get
+            {
+                double sum = 0;
+                foreach (var c in CostData)
+                {
+                    sum += c.Cost;
+                }
+                return Math.Round(sum, 2);
+            }
+        }
+
+        // 其余 IEc2 属性可以用默认实现/显式抛异常，看你们 interface 有多少
+    }
+
+    /// <summary>
+    /// 伪造的 cost 数据，用于 CostData 映射。
+    /// </summary>
+    public class FakeEc2CostData : IEc2CostData
+    {
+        public double Cost { get; set; }
+        public string StartDate { get; set; }
+        public string EndDate { get; set; }
+        // 如果 IEc2CostData 还有其他字段，可按需要加上
+    }
+
+    /// <summary>
+    /// 最简单版本的 FakeLogger，只要实现 Info(string) 就行。
+    /// </summary>
+    public class FakeLogger : ILoggingManager
+    {
+        public void Info(string message)
+        {
+            // 可以留空，或者写入 Debug 输出
+            System.Diagnostics.Debug.WriteLine($"INFO: {message}");
+        }
+
+        // 如果 ILoggingManager 还有其他方法，可以全部空实现
+    }
+}
