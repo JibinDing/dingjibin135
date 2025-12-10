@@ -1,0 +1,19 @@
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Barclays.Alm.Ramebbo.Contracts.CostManagement;
+using Barclays.Alm.Ramebbo.Infrastructure.Cache;   // ICostExplorerCache 的命名空间，按你实际的改
+
+namespace Barclays.Alm.Ramebbo.UnitTest.Fakes
+{
+    public class FakeCostExplorerCache : ICostExplorerCache
+    {
+        public Task<List<CostData>> GetMonthlyCostDataAsync()
+            => Task.FromResult(new List<CostData>());
+
+        public Task<List<CostData>> GetDailyCostDataAsync()
+            => Task.FromResult(new List<CostData>());
+
+        public Task<List<CostData>> GetHourlyCostDataAsync()
+            => Task.FromResult(new List<CostData>());
+    }
+}
