@@ -1,0 +1,66 @@
+using Barclays.Alm.Ramebbo.Contracts.Domain;
+using Barclays.Alm.Ramebbo.Contracts.Services;
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+namespace Barclays.Alm.Ramebbo.UnitTest.Fakes
+{
+    internal class FakeAwsConsoleService : IAwsConsoleService
+    {
+        public int CallCount { get; private set; }
+        public string LastGranularity { get; private set; }
+        public List<string> AllGranularities { get; } = new List<string>();
+
+        public Task<IList<IEc2>> GetEc2InstancesWithCostAsync(string granularity)
+        {
+            CallCount++;
+            LastGranularity = granularity;
+            AllGranularities.Add(granularity);
+
+            // 这里按你测试需要，返回一个带 costData 的 EC2
+            var fakeEc2 = new FakeEc2
+            {
+                Id = "i-1234567890",
+                NodeName = "uat3.account_gateway",
+                Name = "duwdsm022166458.intranet.barcapint.com",
+                AmazonInstanceType = "m7i.2xlarge",
+                Environment = "uat3.account",
+                AppEnvironment = "BLZDEV",
+                Account = "uat3",
+            };
+
+            fakeEc2.CostData.Add(new FakeEc2CostData
+            {
+                Cost = 0.8174,
+                StartDate = "00:00",
+                EndDate = "01:00"
+            });
+
+            IList<IEc2> list = new List<IEc2> { fakeEc2 };
+            return Task.FromResult(list);
+        }
+
+        public Task<IList<IEc2>> GetEc2InstancesAsync()
+            => throw new NotImplementedException();
+
+        public Task<IList<IEc2Reservation>> GetEc2ReservationsAsync()
+            => throw new NotImplementedException();
+
+        // 注意：这里必须是 Task<List<IStateResult>>，不能写 IList<>
+        public Task<List<IStateResult>> StopInstances(List<string> instances)
+            => throw new NotImplementedException();
+
+        public Task<List<IStateResult>> StartInstances(List<string> instances)
+            => throw new NotImplementedException();
+
+        public Task<List<IStateResult>> RebootInstances(List<string> instances)
+            => throw new NotImplementedException();
+
+        public Task<IStateResult> ChangeInstancesType(IRamebboEvent instancesChangeRequest)
+            => throw new NotImplementedException();
+
+        public bool IsValidInstance(string instanceName)
+            => throw new NotImplementedException();
+    }
+}
