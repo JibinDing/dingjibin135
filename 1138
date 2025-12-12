@@ -1,0 +1,11 @@
+public string ReservationId { get; set; } = "fake-reservation";
+public string Owner { get; set; } = "fake-owner";
+public string Function { get; set; } = "fake-function";
+public string Roles { get; set; } = "fake-roles";
+public string Subgroup { get; set; } = "fake-subgroup";
+public string HeadName { get; set; } = "fake-head";
+public string AutoStart { get; set; } = "N";
+public string AutoShutdown { get; set; } = "N";
+public bool KeepMe { get; set; } = false;
+public string CurrentState { get; set; } = "running";
+public string AmazonAvailabilityZone { get; set; } = "eu-west-1a";
